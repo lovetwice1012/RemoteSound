@@ -16,11 +16,14 @@ const levelMeter = document.querySelector("#level");
 const logElement = document.querySelector("#log");
 
 let audioContext;
-let mediaStream;
+let microphoneStream;
+let displayStream;
 let sourceNode;
 let workletNode;
 let websocket;
 let oscillatorNode;
+let activeMode;
+
 const clientIdKey = "remotesound-client-id";
 
 function log(message) {
@@ -49,6 +52,49 @@ function setStableClientId(value) {
   clientIdInput.value = value;
 }
 
+function defaultSourceName(mode) {
+  switch (mode) {
+    case "speaker":
+      return "Browser Speaker";
+    case "tone":
+      return "Browser Tone";
+    case "microphone":
+    default:
+      return "Browser Client";
+  }
+}
+
+function stopStream(stream) {
+  if (!stream) {
+    return;
+  }
+
+  for (const track of stream.getTracks()) {
+    track.stop();
+  }
+}
+
+function cleanupSource() {
+  if (sourceNode) {
+    sourceNode.disconnect();
+    sourceNode = undefined;
+  }
+
+  if (oscillatorNode) {
+    oscillatorNode.stop();
+    oscillatorNode.disconnect();
+    oscillatorNode = undefined;
+  }
+
+  stopStream(microphoneStream);
+  microphoneStream = undefined;
+
+  stopStream(displayStream);
+  displayStream = undefined;
+
+  activeMode = undefined;
+}
+
 async function ensureAudioPipeline() {
   if (!audioContext) {
     audioContext = new AudioContext({ sampleRate: SAMPLE_RATE, latencyHint: "interactive" });
@@ -65,15 +111,17 @@ async function ensureAudioPipeline() {
       numberOfInputs: 1,
       numberOfOutputs: 0,
       channelCount: CHANNELS,
+      channelCountMode: "explicit",
+      channelInterpretation: "speakers",
     });
 
     workletNode.port.onmessage = ({ data }) => {
-      if (!websocket || websocket.readyState !== WebSocket.OPEN) {
+      if (data.type === "level") {
+        levelMeter.value = data.value;
         return;
       }
 
-      if (data.type === "level") {
-        levelMeter.value = data.value;
+      if (!websocket || websocket.readyState !== WebSocket.OPEN) {
         return;
       }
 
@@ -91,35 +139,74 @@ async function ensureAudioPipeline() {
   });
 }
 
+async function createMicrophoneStream() {
+  return navigator.mediaDevices.getUserMedia({
+    audio: {
+      channelCount: CHANNELS,
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false,
+      sampleRate: SAMPLE_RATE,
+    },
+  });
+}
+
+async function createSpeakerCaptureStream() {
+  if (!navigator.mediaDevices?.getDisplayMedia) {
+    throw new Error("This browser does not support speaker/tab audio capture with getDisplayMedia(). Use Chrome or Edge on a secure origin such as localhost.");
+  }
+
+  const stream = await navigator.mediaDevices.getDisplayMedia({
+    video: true,
+    audio: {
+      channelCount: CHANNELS,
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false,
+      sampleRate: SAMPLE_RATE,
+    },
+  });
+
+  if (stream.getAudioTracks().length === 0) {
+    stopStream(stream);
+    throw new Error("No speaker audio track was shared. Select a tab/window/screen and enable Share audio in the browser picker.");
+  }
+
+  for (const track of stream.getTracks()) {
+    track.addEventListener("ended", () => {
+      if (displayStream === stream) {
+        log("Speaker/tab audio capture ended.");
+        disconnect();
+      }
+    });
+  }
+
+  return stream;
+}
+
 async function ensureSelectedSource() {
   const mode = modeInput.value;
-
-  if (sourceNode) {
-    sourceNode.disconnect();
-    sourceNode = undefined;
+  if (activeMode === mode && sourceNode) {
+    return;
   }
 
-  if (oscillatorNode) {
-    oscillatorNode.stop();
-    oscillatorNode.disconnect();
-    oscillatorNode = undefined;
-  }
+  cleanupSource();
 
   if (mode === "microphone") {
-    if (!mediaStream) {
-      mediaStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: CHANNELS,
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: false,
-          sampleRate: SAMPLE_RATE,
-        },
-      });
-    }
-
-    sourceNode = audioContext.createMediaStreamSource(mediaStream);
+    microphoneStream = await createMicrophoneStream();
+    sourceNode = audioContext.createMediaStreamSource(microphoneStream);
     sourceNode.connect(workletNode);
+    activeMode = mode;
+    log("Using microphone input.");
+    return;
+  }
+
+  if (mode === "speaker") {
+    displayStream = await createSpeakerCaptureStream();
+    sourceNode = audioContext.createMediaStreamSource(displayStream);
+    sourceNode.connect(workletNode);
+    activeMode = mode;
+    log("Using speaker/tab audio capture.");
     return;
   }
 
@@ -130,6 +217,8 @@ async function ensureSelectedSource() {
   sourceNode = oscillatorNode;
   sourceNode.connect(workletNode);
   oscillatorNode.start();
+  activeMode = mode;
+  log("Using synthetic tone.");
 }
 
 async function connect() {
@@ -139,9 +228,10 @@ async function connect() {
   websocket.binaryType = "arraybuffer";
 
   websocket.addEventListener("open", () => {
+    const mode = modeInput.value;
     const hello = {
       type: "hello",
-      name: nameInput.value || (modeInput.value === "tone" ? "Browser Tone" : "Browser Client"),
+      name: nameInput.value || defaultSourceName(mode),
       clientID: clientIdInput.value || getStableClientId(),
       sampleRate: SAMPLE_RATE,
       channels: CHANNELS,
@@ -172,6 +262,7 @@ async function connect() {
     levelMeter.value = 0;
     log("Disconnected.");
     websocket = undefined;
+    cleanupSource();
   });
 
   websocket.addEventListener("error", () => {
@@ -182,13 +273,20 @@ async function connect() {
 async function disconnect() {
   if (websocket && websocket.readyState <= WebSocket.OPEN) {
     websocket.close();
+    return;
   }
+
+  cleanupSource();
+  setConnectedState(false);
+  levelMeter.value = 0;
 }
 
 connectButton.addEventListener("click", async () => {
   try {
     await connect();
   } catch (error) {
+    cleanupSource();
+    setConnectedState(false);
     log(`Failed to start: ${error.message}`);
   }
 });
@@ -217,11 +315,20 @@ frequencyInput.addEventListener("input", () => {
 });
 
 modeInput.addEventListener("input", async () => {
-  if (!audioContext) {
+  const defaultName = defaultSourceName(modeInput.value);
+  if (!nameInput.value || ["Browser Client", "Browser Speaker", "Browser Tone"].includes(nameInput.value)) {
+    nameInput.value = defaultName;
+  }
+
+  if (!audioContext || !workletNode) {
     return;
   }
 
-  await ensureSelectedSource();
+  try {
+    await ensureSelectedSource();
+  } catch (error) {
+    log(`Failed to switch source: ${error.message}`);
+  }
 });
 
 waveformInput.addEventListener("input", async () => {

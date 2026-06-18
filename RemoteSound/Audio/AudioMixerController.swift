@@ -67,11 +67,18 @@ final class AudioMixerController {
     private let engine = AVAudioEngine()
     private let engineQueue = DispatchQueue(label: "RemoteSound.AudioMixer")
     private let sampleRate: Double
+    private let backgroundKeepAliveChannelCount: AVAudioChannelCount = 2
+    private let backgroundKeepAliveDuration: Double = 0.25
     private let minimumLeadBufferCount = 3
     private let targetLeadBufferCount = 6
     private let maximumQueuedBufferCount = 18
     private var notificationTokens: [NSObjectProtocol] = []
     private var channels: [UUID: SourceChannel] = [:]
+    private let backgroundKeepAliveNode = AVAudioPlayerNode()
+    private var backgroundKeepAliveFormat: AVAudioFormat?
+    private var backgroundKeepAliveBuffer: AVAudioPCMBuffer?
+    private var backgroundKeepAliveIsAttached = false
+    private var backgroundKeepAliveIsScheduled = false
     var onSourceStatsChanged: ((UUID, AudioSourceRuntimeStats) -> Void)?
     var onStatusMessage: ((String) -> Void)?
 
@@ -106,6 +113,22 @@ final class AudioMixerController {
 
     func reactivateIfNeeded(reason: String) {
         reactivateSession(reason: reason)
+    }
+
+    func prepareForBackgroundPlayback() {
+        engineQueue.async {
+            do {
+                try self.configureSession()
+                if !self.channels.isEmpty {
+                    try self.ensureEngineRunningLocked(reason: "app entering background")
+                    self.ensureBackgroundKeepAliveRunningLocked()
+                    self.onStatusMessage?("Background audio active.")
+                }
+            } catch {
+                NSLog("AudioMixerController.prepareForBackgroundPlayback failed: %@", error as NSError)
+                self.onStatusMessage?("Background audio setup failed: \(error.localizedDescription)")
+            }
+        }
     }
 
     func registerSource(id: UUID, sampleRate: Double, channelCount: AVAudioChannelCount) {
@@ -169,6 +192,7 @@ final class AudioMixerController {
             }
 
             self.removeSourceChannel(id: id, channel: channel)
+            self.stopEngineIfIdleLocked()
         }
     }
 
@@ -231,6 +255,7 @@ final class AudioMixerController {
 
     private func ensureEngineRunningLocked(reason: String) throws {
         guard !engine.isRunning else {
+            ensureBackgroundKeepAliveRunningLocked()
             return
         }
 
@@ -238,6 +263,8 @@ final class AudioMixerController {
             NSLog("AudioMixerController.ensureEngineRunningLocked: skipped because there are no source channels (reason=%@)", reason)
             return
         }
+
+        try configureBackgroundKeepAliveLocked()
 
         let outputFormat = engine.outputNode.inputFormat(forBus: 0)
         guard outputFormat.sampleRate > 0, outputFormat.channelCount > 0 else {
@@ -263,6 +290,81 @@ final class AudioMixerController {
         // prepare() is intentionally omitted. AVAudioEngine.start() performs the
         // required initialization and reports recoverable failures as thrown errors.
         try engine.start()
+        ensureBackgroundKeepAliveRunningLocked()
+    }
+
+    private func configureBackgroundKeepAliveLocked() throws {
+        if backgroundKeepAliveIsAttached {
+            return
+        }
+
+        guard let format = AVAudioFormat(
+            standardFormatWithSampleRate: sampleRate,
+            channels: backgroundKeepAliveChannelCount
+        ) else {
+            throw AudioMixerError.invalidOutputFormat(
+                sampleRate: sampleRate,
+                channelCount: backgroundKeepAliveChannelCount
+            )
+        }
+
+        let frameCapacity = max(
+            AVAudioFrameCount(1),
+            AVAudioFrameCount(sampleRate * backgroundKeepAliveDuration)
+        )
+
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCapacity) else {
+            throw AudioMixerError.invalidOutputFormat(
+                sampleRate: format.sampleRate,
+                channelCount: format.channelCount
+            )
+        }
+
+        buffer.frameLength = frameCapacity
+        if let floatChannels = buffer.floatChannelData {
+            for channel in 0..<Int(format.channelCount) {
+                for frame in 0..<Int(frameCapacity) {
+                    floatChannels[channel][frame] = 0
+                }
+            }
+        }
+
+        engine.attach(backgroundKeepAliveNode)
+        engine.connect(backgroundKeepAliveNode, to: engine.mainMixerNode, format: format)
+        backgroundKeepAliveFormat = format
+        backgroundKeepAliveBuffer = buffer
+        backgroundKeepAliveIsAttached = true
+
+        NSLog(
+            "AudioMixerController: background keep-alive node attached (sampleRate=%f channels=%u frames=%u)",
+            format.sampleRate,
+            format.channelCount,
+            frameCapacity
+        )
+    }
+
+    private func ensureBackgroundKeepAliveRunningLocked() {
+        guard backgroundKeepAliveIsAttached, let buffer = backgroundKeepAliveBuffer else {
+            return
+        }
+
+        if !backgroundKeepAliveIsScheduled {
+            backgroundKeepAliveNode.scheduleBuffer(buffer, at: nil, options: [.loops], completionHandler: nil)
+            backgroundKeepAliveIsScheduled = true
+        }
+
+        if !backgroundKeepAliveNode.isPlaying {
+            backgroundKeepAliveNode.play()
+        }
+    }
+
+    private func stopBackgroundKeepAliveLocked() {
+        guard backgroundKeepAliveIsAttached else {
+            return
+        }
+
+        backgroundKeepAliveNode.stop()
+        backgroundKeepAliveIsScheduled = false
     }
 
     private func configureSession() throws {
@@ -310,6 +412,20 @@ final class AudioMixerController {
         engine.detach(channel.playerNode)
         engine.detach(channel.equalizer)
         engine.detach(channel.volumeNode)
+    }
+
+    private func stopEngineIfIdleLocked() {
+        guard channels.isEmpty else {
+            return
+        }
+
+        stopBackgroundKeepAliveLocked()
+
+        if engine.isRunning {
+            engine.stop()
+            NSLog("AudioMixerController: engine stopped because all sources disconnected")
+            onStatusMessage?("Audio session active. Waiting for sources.")
+        }
     }
 
     private func installNotificationObservers() {
@@ -430,7 +546,11 @@ final class AudioMixerController {
 
                     if activeChannel.scheduledBufferCount == 0, activeChannel.pendingBuffers.isEmpty {
                         activeChannel.hasStartedPlayback = false
-                        activeChannel.playerNode.stop()
+                        // Do not stop the player node on a transient underrun.
+                        // Keeping the node in the playing state lets newly scheduled
+                        // buffers resume immediately, and the background keep-alive
+                        // node keeps the audio engine active while the app is in the
+                        // background.
                     } else {
                         self.pumpBuffers(for: id, channel: activeChannel)
                     }

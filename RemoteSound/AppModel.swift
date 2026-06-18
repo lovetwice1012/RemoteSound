@@ -47,8 +47,13 @@ final class AppModel {
     }
 
     func handleScenePhase(_ phase: ScenePhase) {
-        if phase == .active {
+        switch phase {
+        case .active:
             mixer.reactivateIfNeeded(reason: "app became active")
+        case .background:
+            mixer.prepareForBackgroundPlayback()
+        default:
+            break
         }
     }
 
