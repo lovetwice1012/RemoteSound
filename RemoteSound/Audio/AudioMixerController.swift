@@ -1,6 +1,17 @@
 import AVFAudio
 import Foundation
 
+enum AudioMixerError: LocalizedError {
+    case invalidOutputFormat(sampleRate: Double, channelCount: AVAudioChannelCount)
+
+    var errorDescription: String? {
+        switch self {
+        case let .invalidOutputFormat(sampleRate, channelCount):
+            return "Invalid audio output format: sampleRate=\(sampleRate), channelCount=\(channelCount)."
+        }
+    }
+}
+
 final class AudioMixerController {
     private struct ChannelSettings {
         var isEnabled = true
@@ -85,25 +96,12 @@ final class AudioMixerController {
             throw error
         }
 
-        var caughtError: Error?
-        engineQueue.sync {
-            guard !engine.isRunning else {
-                return
-            }
-
-            engine.prepare()
-
-            do {
-                try engine.start()
-            } catch {
-                NSLog("AudioMixerController.start: engine.start failed: %@", error as NSError)
-                caughtError = error
-            }
-        }
-
-        if let caughtError {
-            throw caughtError
-        }
+        // Do not call AVAudioEngine.prepare() or start the engine here.
+        // On iOS, prepare() can raise an Objective-C exception when the graph is not
+        // fully initialized yet; Swift do-catch cannot catch that exception.
+        // The engine is started lazily after the first source node has been attached
+        // and connected.
+        NSLog("AudioMixerController.start: session is active; engine will start after the first source is connected")
     }
 
     func reactivateIfNeeded(reason: String) {
@@ -149,6 +147,17 @@ final class AudioMixerController {
 
             channel.applySettings()
             self.channels[id] = channel
+
+            do {
+                try self.ensureEngineRunningLocked(reason: "source registered")
+                self.onStatusMessage?("Audio engine active.")
+            } catch {
+                NSLog("AudioMixerController.registerSource: engine start failed: %@", error as NSError)
+                self.onStatusMessage?("Audio engine start failed: \(error.localizedDescription)")
+                self.removeSourceChannel(id: id, channel: channel)
+                return
+            }
+
             self.reportStats(for: id, channel: channel)
         }
     }
@@ -218,6 +227,42 @@ final class AudioMixerController {
             self.pumpBuffers(for: id, channel: channel)
             self.reportStats(for: id, channel: channel)
         }
+    }
+
+    private func ensureEngineRunningLocked(reason: String) throws {
+        guard !engine.isRunning else {
+            return
+        }
+
+        guard !channels.isEmpty else {
+            NSLog("AudioMixerController.ensureEngineRunningLocked: skipped because there are no source channels (reason=%@)", reason)
+            return
+        }
+
+        let outputFormat = engine.outputNode.inputFormat(forBus: 0)
+        guard outputFormat.sampleRate > 0, outputFormat.channelCount > 0 else {
+            NSLog(
+                "AudioMixerController.ensureEngineRunningLocked: invalid output format sampleRate=%f channelCount=%u",
+                outputFormat.sampleRate,
+                outputFormat.channelCount
+            )
+            throw AudioMixerError.invalidOutputFormat(
+                sampleRate: outputFormat.sampleRate,
+                channelCount: outputFormat.channelCount
+            )
+        }
+
+        NSLog(
+            "AudioMixerController.ensureEngineRunningLocked: starting engine (reason=%@ outputSampleRate=%f outputChannels=%u sources=%d)",
+            reason,
+            outputFormat.sampleRate,
+            outputFormat.channelCount,
+            channels.count
+        )
+
+        // prepare() is intentionally omitted. AVAudioEngine.start() performs the
+        // required initialization and reports recoverable failures as thrown errors.
+        try engine.start()
     }
 
     private func configureSession() throws {
@@ -333,10 +378,7 @@ final class AudioMixerController {
             do {
                 try self.configureSession()
 
-                if !self.engine.isRunning {
-                    self.engine.prepare()
-                    try self.engine.start()
-                }
+                try self.ensureEngineRunningLocked(reason: reason)
 
                 for (id, channel) in self.channels {
                     let totalBufferedCount = channel.scheduledBufferCount + channel.pendingBuffers.count
