@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>RemoteSound Web Client</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #0f172a;
+        --panel: rgba(15, 23, 42, 0.86);
+        --accent: #22c55e;
+        --accent-2: #38bdf8;
+        --text: #e2e8f0;
+        --muted: #94a3b8;
+        --border: rgba(148, 163, 184, 0.22);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: "Segoe UI", "Helvetica Neue", sans-serif;
+        color: var(--text);
+        background:
+          radial-gradient(circle at top left, rgba(56, 189, 248, 0.24), transparent 30%),
+          radial-gradient(circle at bottom right, rgba(34, 197, 94, 0.18), transparent 25%),
+          linear-gradient(145deg, #020617, #111827 45%, #0f172a);
+      }
+
+      main {
+        width: min(760px, calc(100vw - 32px));
+        margin: 32px auto;
+        padding: 28px;
+        border: 1px solid var(--border);
+        border-radius: 28px;
+        background: var(--panel);
+        backdrop-filter: blur(22px);
+        box-shadow: 0 24px 70px rgba(2, 6, 23, 0.45);
+      }
+
+      h1 {
+        margin: 0 0 8px;
+        font-size: clamp(2rem, 4vw, 3rem);
+      }
+
+      p {
+        margin: 0 0 24px;
+        color: var(--muted);
+        line-height: 1.5;
+      }
+
+      .grid {
+        display: grid;
+        gap: 16px;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      }
+
+      label {
+        display: grid;
+        gap: 8px;
+        font-size: 0.95rem;
+      }
+
+      input,
+      select,
+      button {
+        border-radius: 14px;
+        border: 1px solid var(--border);
+        padding: 14px 16px;
+        font-size: 1rem;
+      }
+
+      input,
+      select {
+        color: var(--text);
+        background: rgba(15, 23, 42, 0.6);
+      }
+
+      button {
+        cursor: pointer;
+        color: #04130b;
+        background: linear-gradient(135deg, var(--accent), #86efac);
+        font-weight: 700;
+      }
+
+      button.secondary {
+        color: var(--text);
+        background: rgba(15, 23, 42, 0.6);
+      }
+
+      .controls {
+        display: flex;
+        gap: 12px;
+        margin: 20px 0;
+        flex-wrap: wrap;
+      }
+
+      .inline {
+        display: grid;
+        gap: 8px;
+        grid-template-columns: 1fr auto;
+        align-items: center;
+      }
+
+      .meter {
+        margin-top: 12px;
+      }
+
+      progress {
+        width: 100%;
+        height: 18px;
+      }
+
+      pre {
+        min-height: 180px;
+        overflow: auto;
+        padding: 16px;
+        border-radius: 20px;
+        background: rgba(2, 6, 23, 0.76);
+        border: 1px solid var(--border);
+        color: #bfdbfe;
+        font-family: "Cascadia Code", "SFMono-Regular", monospace;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>RemoteSound Web Client</h1>
+      <p>
+        Browser-based microphone streamer for RemoteSound. Serve this folder from
+        <code>localhost</code> or another secure origin, then connect to your iPhone or iPad on the same LAN.
+      </p>
+
+      <section class="grid">
+        <label>
+          WebSocket URL
+          <input id="url" value="ws://192.168.1.24:8765" />
+        </label>
+        <label>
+          Source Mode
+          <select id="mode">
+            <option value="microphone" selected>Microphone</option>
+            <option value="tone">Synthetic Tone</option>
+          </select>
+        </label>
+        <label>
+          Source Name
+          <input id="name" value="Browser Client" />
+        </label>
+        <label>
+          Client ID
+          <div class="inline">
+            <input id="clientId" />
+            <button id="newClientId" type="button" class="secondary">New</button>
+          </div>
+        </label>
+        <label>
+          Gain
+          <input id="gain" type="number" min="0" max="4" step="0.1" value="1.0" />
+        </label>
+        <label>
+          Tone Frequency
+          <input id="frequency" type="number" min="40" max="4000" step="1" value="440" />
+        </label>
+        <label>
+          Tone Waveform
+          <select id="waveform">
+            <option value="sine" selected>Sine</option>
+            <option value="square">Square</option>
+            <option value="sawtooth">Sawtooth</option>
+            <option value="triangle">Triangle</option>
+          </select>
+        </label>
+      </section>
+
+      <div class="controls">
+        <button id="connect">Connect & Stream</button>
+        <button id="disconnect" class="secondary" disabled>Disconnect</button>
+      </div>
+
+      <section class="meter">
+        <label for="level">Input Level</label>
+        <progress id="level" max="1" value="0"></progress>
+      </section>
+
+      <pre id="log"></pre>
+    </main>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

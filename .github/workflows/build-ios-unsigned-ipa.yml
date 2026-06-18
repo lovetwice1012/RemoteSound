@@ -1,0 +1,97 @@
+name: Build unsigned iOS IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-unsigned-ipa:
+    runs-on: macos-26
+
+    env:
+      XCODE_CONTAINER: RemoteSound.xcodeproj
+      SCHEME: RemoteSound
+      CONFIGURATION: Release
+      ARCHIVE_PATH: build/RemoteSound.xcarchive
+      IPA_PATH: build/RemoteSound-unsigned.ipa
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: |
+            set -euo pipefail
+            brew install xcodegen
+      - name: Generate Xcode project
+        run: |
+            set -euo pipefail
+            xcodegen generate
+
+      - name: Show Xcode version
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          xcode-select -p
+
+      - name: Decide Xcode container flag
+        run: |
+          set -euo pipefail
+          case "$XCODE_CONTAINER" in
+            *.xcworkspace)
+              echo "XCODE_CONTAINER_FLAG=-workspace" >> "$GITHUB_ENV"
+              ;;
+            *.xcodeproj)
+              echo "XCODE_CONTAINER_FLAG=-project" >> "$GITHUB_ENV"
+              ;;
+            *)
+              echo "XCODE_CONTAINER must end with .xcodeproj or .xcworkspace" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Resolve Swift packages
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            "$XCODE_CONTAINER_FLAG" "$XCODE_CONTAINER" \
+            -scheme "$SCHEME" \
+            -resolvePackageDependencies
+
+      - name: Archive for iPhoneOS without code signing
+        run: |
+          set -euo pipefail
+          rm -rf "$ARCHIVE_PATH" build/Payload "$IPA_PATH"
+          xcodebuild archive \
+            "$XCODE_CONTAINER_FLAG" "$XCODE_CONTAINER" \
+            -scheme "$SCHEME" \
+            -configuration "$CONFIGURATION" \
+            -destination "generic/platform=iOS" \
+            -archivePath "$ARCHIVE_PATH" \
+            SKIP_INSTALL=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
+
+      - name: Package .app into unsigned .ipa
+        run: |
+          set -euo pipefail
+          APP_PATH="$(find "$ARCHIVE_PATH/Products/Applications" -maxdepth 1 -type d -name '*.app' | head -n 1)"
+          if [ -z "$APP_PATH" ]; then
+            echo "No .app found under $ARCHIVE_PATH/Products/Applications" >&2
+            find "$ARCHIVE_PATH" -maxdepth 5 -print >&2
+            exit 1
+          fi
+
+          mkdir -p build/Payload
+          cp -R "$APP_PATH" build/Payload/
+          (cd build && zip -qry "$(basename "$IPA_PATH")" Payload)
+          ls -lh "$IPA_PATH"
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-ipa
+          path: ${{ env.IPA_PATH }}
+          if-no-files-found: error

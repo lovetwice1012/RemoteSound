@@ -1,0 +1,25 @@
+name: RemoteSound
+options:
+  minimumXcodeGenVersion: 2.40.0
+settings:
+  base:
+    SWIFT_VERSION: 5.0
+    IPHONEOS_DEPLOYMENT_TARGET: 17.0
+    PRODUCT_BUNDLE_IDENTIFIER: cloud.sprink.RemoteSound
+    DEVELOPMENT_TEAM: ""
+targets:
+  RemoteSound:
+    type: application
+    platform: iOS
+    sources:
+      - path: RemoteSound
+    info:
+      path: RemoteSound/Info.plist
+    settings:
+      base:
+        PRODUCT_NAME: RemoteSound
+        GENERATE_INFOPLIST_FILE: NO
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        CODE_SIGN_STYLE: Manual
+        CURRENT_PROJECT_VERSION: 1
+        MARKETING_VERSION: 1.0
