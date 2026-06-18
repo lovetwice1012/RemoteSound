@@ -63,7 +63,9 @@ final class WebSocketAudioServer {
             case .ready:
                 self?.onServerStateChange?("Listening on port \(port.rawValue)")
             case .failed(let error):
-                self?.onServerStateChange?("Listener failed: \(error.localizedDescription)")
+                let nsError = error as NSError
+                self?.onServerStateChange?("Listener failed: \(error.localizedDescription) (\(nsError.domain) code \(nsError.code))")
+                NSLog("NWListener failed: %@", nsError)
             case .cancelled:
                 self?.onServerStateChange?("Listener stopped")
             default:

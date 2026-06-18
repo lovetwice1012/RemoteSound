@@ -134,8 +134,10 @@ final class AppModel {
             audioStatusMessage = "Audio session active."
         } catch {
             serverIsRunning = false
-            serverMessage = "Startup failed: \(error.localizedDescription)"
-            audioStatusMessage = "Audio session failed: \(error.localizedDescription)"
+            let nsError = error as NSError
+            serverMessage = "Startup failed: \(error.localizedDescription) (\(nsError.domain) code \(nsError.code))"
+            audioStatusMessage = "Audio session failed: \(error.localizedDescription) (\(nsError.domain) code \(nsError.code))"
+            NSLog("Server start error: %@", nsError)
         }
     }
 
