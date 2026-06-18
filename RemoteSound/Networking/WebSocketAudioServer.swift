@@ -25,7 +25,6 @@ final class WebSocketAudioServer {
 
     private let queue = DispatchQueue(label: "RemoteSound.WebSocketServer")
     private let handshakeTimeout: TimeInterval = 5
-    private let audioInactivityTimeout: TimeInterval = 15
     private var listener: NWListener?
     private var cleanupTimer: DispatchSourceTimer?
     private var connections: [UUID: ConnectionContext] = [:]
@@ -41,6 +40,26 @@ final class WebSocketAudioServer {
             return
         }
 
+        try startListener()
+    }
+
+    func restartIfNeeded() {
+        queue.async {
+            guard self.listener == nil else {
+                return
+            }
+
+            do {
+                try self.startListener()
+            } catch {
+                let nsError = error as NSError
+                self.onServerStateChange?("Server restart failed: \(error.localizedDescription) (\(nsError.domain) code \(nsError.code))")
+                NSLog("Server restart error: %@", nsError)
+            }
+        }
+    }
+
+    private func startListener() throws {
         let tcpOptions = NWProtocolTCP.Options()
         let parameters = NWParameters(tls: nil, tcp: tcpOptions)
         parameters.allowLocalEndpointReuse = true
@@ -66,8 +85,10 @@ final class WebSocketAudioServer {
                 let nsError = error as NSError
                 self?.onServerStateChange?("Listener failed: \(error.localizedDescription) (\(nsError.domain) code \(nsError.code))")
                 NSLog("NWListener failed: %@", nsError)
+                self?.markListenerStopped(listener)
             case .cancelled:
                 self?.onServerStateChange?("Listener stopped")
+                self?.markListenerStopped(listener)
             default:
                 break
             }
@@ -240,6 +261,12 @@ final class WebSocketAudioServer {
         onSourceDisconnected?(id)
     }
 
+    private func markListenerStopped(_ stoppedListener: NWListener) {
+        if listener === stoppedListener {
+            listener = nil
+        }
+    }
+
     private func startCleanupTimerIfNeeded() {
         guard cleanupTimer == nil else {
             return
@@ -257,8 +284,8 @@ final class WebSocketAudioServer {
     private func pruneInactiveConnections() {
         let now = Date()
         let staleIDs = connections.compactMap { id, context -> UUID? in
-            let timeout = context.hasCompletedHandshake ? audioInactivityTimeout : handshakeTimeout
-            guard now.timeIntervalSince(context.lastActivityAt) >= timeout else {
+            guard !context.hasCompletedHandshake,
+                  now.timeIntervalSince(context.lastActivityAt) >= handshakeTimeout else {
                 return nil
             }
 
@@ -269,7 +296,7 @@ final class WebSocketAudioServer {
             return
         }
 
-        onServerStateChange?("Removed \(staleIDs.count) inactive source connection(s).")
+        onServerStateChange?("Removed \(staleIDs.count) pending source connection(s).")
         staleIDs.forEach { staleID in
             removeConnection(id: staleID)
         }

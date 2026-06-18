@@ -69,6 +69,7 @@ final class AudioMixerController {
     private let sampleRate: Double
     private let backgroundKeepAliveChannelCount: AVAudioChannelCount = 2
     private let backgroundKeepAliveDuration: Double = 0.25
+    private let backgroundKeepAliveAmplitude: Float = 0.00001
     private let minimumLeadBufferCount = 3
     private let targetLeadBufferCount = 6
     private let maximumQueuedBufferCount = 18
@@ -324,7 +325,7 @@ final class AudioMixerController {
         if let floatChannels = buffer.floatChannelData {
             for channel in 0..<Int(format.channelCount) {
                 for frame in 0..<Int(frameCapacity) {
-                    floatChannels[channel][frame] = 0
+                    floatChannels[channel][frame] = frame.isMultiple(of: 2) ? backgroundKeepAliveAmplitude : -backgroundKeepAliveAmplitude
                 }
             }
         }

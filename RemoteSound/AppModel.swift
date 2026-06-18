@@ -2,6 +2,7 @@ import AVFAudio
 import Foundation
 import Observation
 import SwiftUI
+import UIKit
 
 @MainActor
 @Observable
@@ -18,6 +19,7 @@ final class AppModel {
     private let mixer = AudioMixerController()
     private let settingsStore = SourceSettingsStore()
     private var server: WebSocketAudioServer?
+    private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
 
     init() {
         server = WebSocketAudioServer(port: serverPort)
@@ -49,10 +51,16 @@ final class AppModel {
     func handleScenePhase(_ phase: ScenePhase) {
         switch phase {
         case .active:
+            endBackgroundAudioTask()
+            server?.restartIfNeeded()
             mixer.reactivateIfNeeded(reason: "app became active")
         case .inactive:
+            beginBackgroundAudioTaskIfNeeded()
+            server?.restartIfNeeded()
             mixer.prepareForBackgroundPlayback()
         case .background:
+            beginBackgroundAudioTaskIfNeeded()
+            server?.restartIfNeeded()
             mixer.prepareForBackgroundPlayback()
         default:
             break
@@ -131,6 +139,27 @@ final class AppModel {
     private func applyEqualizer(for index: Int) {
         let source = sources[index]
         mixer.setEqualizer(low: source.lowGain, mid: source.midGain, high: source.highGain, for: source.id)
+    }
+
+    private func beginBackgroundAudioTaskIfNeeded() {
+        guard backgroundTaskID == .invalid, !sources.isEmpty else {
+            return
+        }
+
+        backgroundTaskID = UIApplication.shared.beginBackgroundTask(withName: "RemoteSound background audio") { [weak self] in
+            Task { @MainActor in
+                self?.endBackgroundAudioTask()
+            }
+        }
+    }
+
+    private func endBackgroundAudioTask() {
+        guard backgroundTaskID != .invalid else {
+            return
+        }
+
+        UIApplication.shared.endBackgroundTask(backgroundTaskID)
+        backgroundTaskID = .invalid
     }
 
     private func start() {
@@ -243,6 +272,9 @@ final class AppModel {
                 self.sources.removeAll(where: { $0.id == id })
                 self.sortSources()
                 self.refreshSelectionAfterSourceMutation(preferredSourceID: nil)
+                if self.sources.isEmpty {
+                    self.endBackgroundAudioTask()
+                }
             }
         }
 
