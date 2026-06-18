@@ -307,7 +307,7 @@ final class AppModel {
         let shouldFollowUpdatedSource = duplicates.contains(where: { $0.id == selectedSourceID || $0.stableID == selectedStableSourceID })
 
         for duplicate in duplicates {
-            server.disconnectSource(id: duplicate.id)
+            server?.disconnectSource(id: duplicate.id)
         }
 
         if shouldFollowUpdatedSource {
