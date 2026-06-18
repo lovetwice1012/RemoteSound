@@ -17,16 +17,16 @@ internal sealed class PcmFrameAccumulator
         _frameBytes = frameBytes;
     }
 
-    public IEnumerable<byte[]> Push(ReadOnlySpan<byte> pcmBytes)
+    public IEnumerable<byte[]> Push(byte[] pcmBytes)
     {
+        ArgumentNullException.ThrowIfNull(pcmBytes);
+
         if (pcmBytes.Length == 0)
         {
             yield break;
         }
 
-        var previousCount = _pending.Count;
-        _pending.AddRange(new byte[pcmBytes.Length]);
-        pcmBytes.CopyTo(CollectionsMarshal.AsSpan(_pending).Slice(previousCount));
+        _pending.AddRange(pcmBytes);
 
         while (_pending.Count >= _frameBytes)
         {
