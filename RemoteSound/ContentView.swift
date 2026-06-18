@@ -13,7 +13,7 @@ struct ContentView: View {
     var body: some View {
         NavigationSplitView {
             VStack(spacing: 16) {
-                ServerOverviewCard(model: model)
+                RemoteConnectionCard(model: model)
                     .padding(.horizontal)
                     .padding(.top)
 
@@ -21,7 +21,7 @@ struct ContentView: View {
                     ContentUnavailableView(
                         "No Sources Connected",
                         systemImage: "waveform.badge.plus",
-                        description: Text("Start a client on the same LAN and connect it to one of the WebSocket URLs above.")
+                        description: Text("Start the Windows audio server on the same LAN, then connect to its WebSocket URL above.")
                     )
                     .frame(maxHeight: .infinity)
                 } else {
@@ -47,12 +47,12 @@ struct ContentView: View {
     }
 }
 
-private struct ServerOverviewCard: View {
-    let model: AppModel
+private struct RemoteConnectionCard: View {
+    @Bindable var model: AppModel
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label(model.serverIsRunning ? "Server Running" : "Server Starting", systemImage: model.serverIsRunning ? "dot.radiowaves.left.and.right" : "hourglass")
+            Label(model.serverIsRunning ? "Source Connected" : "Source Disconnected", systemImage: model.serverIsRunning ? "dot.radiowaves.left.and.right" : "cable.connector")
                 .font(.headline)
 
             Text(model.serverMessage)
@@ -63,22 +63,30 @@ private struct ServerOverviewCard: View {
                 .font(.footnote)
                 .foregroundStyle(.secondary)
 
-            if model.localAddresses.isEmpty {
-                Text("No IPv4 address found. Make sure the device is connected to Wi-Fi or Ethernet.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            } else {
-                ForEach(model.localAddresses, id: \.self) { address in
-                    Text("ws://\(address):\(model.serverPort)")
-                        .font(.system(.footnote, design: .monospaced))
-                        .textSelection(.enabled)
-                }
-            }
+            Toggle("Auto-connect discovered source", isOn: $model.autoConnectDiscoveredSource)
 
-            Button("Refresh Addresses") {
-                model.refreshAddresses()
+            Text(model.discoveryMessage)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+
+            TextField("ws://192.168.1.10:8765/", text: $model.remoteURLString)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .keyboardType(.URL)
+                .font(.system(.body, design: .monospaced))
+
+            HStack {
+                Button(model.serverIsRunning ? "Reconnect" : "Connect") {
+                    model.connectToRemoteSource()
+                }
+                .buttonStyle(.borderedProminent)
+
+                Button("Disconnect") {
+                    model.disconnectRemoteSource()
+                }
+                .buttonStyle(.bordered)
+                .disabled(!model.serverIsRunning && model.sources.isEmpty)
             }
-            .buttonStyle(.bordered)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding()

@@ -23,7 +23,16 @@
     <key>LSRequiresIPhoneOS</key>
     <true/>
     <key>NSLocalNetworkUsageDescription</key>
-    <string>RemoteSound receives microphone audio from devices on your local network.</string>
+    <string>RemoteSound connects to audio sources on your local network.</string>
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_remoteaudio._tcp</string>
+    </array>
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
+    </dict>
     <key>UIRequiresPersistentWiFi</key>
     <true/>
     <key>UIApplicationSceneManifest</key>

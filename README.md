@@ -1,25 +1,24 @@
 # RemoteSound
 
-RemoteSound is an iOS mixer app that listens for LAN WebSocket audio sources, mixes every active source into one speaker output, and lets you change each source's enable state, volume, and EQ in real time.
+RemoteSound is an iOS mixer app that connects to a LAN WebSocket audio source, mixes the received stream into the speaker output, and lets you change the source's enable state, volume, and EQ in real time.
 
 ## What is included
 
-- An iOS app scaffold driven by [`project.yml`](/C:/Users/yussy/Documents/RemoteSound/project.yml) with SwiftUI, `AVAudioEngine`, and `Network.framework`.
+- An iOS app scaffold driven by [`project.yml`](/C:/Users/yussy/Documents/RemoteSound/project.yml) with SwiftUI, `AVAudioEngine`, and a WebSocket receiving client.
 - A per-source audio chain: `AVAudioPlayerNode -> AVAudioUnitEQ -> AVAudioMixerNode -> main mixer`.
 - A lightweight per-source jitter buffer so short Wi-Fi timing swings do not immediately underrun playback.
 - Runtime controls for enable or mute, gain, and a fixed three-band EQ per connected source.
-- A Python microphone client in [`client/python/stream_client.py`](/C:/Users/yussy/Documents/RemoteSound/client/python/stream_client.py) for macOS, Windows, and Linux.
-- A Python synthetic tone client in [`client/python/tone_client.py`](/C:/Users/yussy/Documents/RemoteSound/client/python/tone_client.py) for deterministic multi-source mixer testing.
-- A browser client in [`client/web/index.html`](/C:/Users/yussy/Documents/RemoteSound/client/web/index.html) for microphone capture, browser speaker/tab-audio capture through screen sharing, and synthetic tone checks.
+- A Windows speaker loopback server in [`client/windows/RemoteSound.WinForms`](/C:/Users/yussy/Documents/RemoteSound/client/windows/RemoteSound.WinForms) that accepts the iPhone connection and streams speaker audio.
+- Legacy Python and browser clients are still present, but they target the previous iPhone-as-server transport.
 
 ## Protocol
 
 RemoteSound currently expects:
 
-- WebSocket transport on `ws://<ios-device-ip>:8765`
-- One UTF-8 JSON `hello` message first
+- WebSocket transport on `ws://<windows-pc-ip>:8765/`
+- The Windows source sends one UTF-8 JSON `hello` message first
 - Include a stable `clientID` if you want the iOS app to restore that source's settings after reconnecting
-- Audio frames as binary `pcm_s16le`
+- The Windows source then sends audio frames as binary `pcm_s16le`
 - 48 kHz
 - Stereo
 - 960 samples per frame
@@ -44,13 +43,23 @@ Example hello payload:
 2. From the repo root, run `xcodegen generate`.
 3. Open the generated `RemoteSound.xcodeproj`.
 4. Set your team and bundle identifier in [`project.yml`](/C:/Users/yussy/Documents/RemoteSound/project.yml) if needed.
-5. Build to a physical iPhone or iPad on the same local network as the clients.
+5. Build to a physical iPhone or iPad on the same local network as the Windows audio server.
 6. Allow Local Network access when prompted.
 7. Keep the app's audio session active so playback can continue in the background.
 
 The app already declares `UIBackgroundModes = audio` and configures `AVAudioSession` for playback.
 
-## Python client setup
+## Windows speaker server setup
+
+1. Build and run [`client/windows/RemoteSound.WinForms`](/C:/Users/yussy/Documents/RemoteSound/client/windows/RemoteSound.WinForms).
+2. Choose the speaker device and listen port. The default port is `8765`.
+3. Click `Start`.
+4. The Windows app advertises `_remoteaudio._tcp` on the local network. The iOS app auto-connects when discovery is enabled.
+5. If discovery is blocked by the network, copy one of the logged `ws://<pc-ip>:8765/` URLs into the iOS app and tap `Connect`.
+
+The Windows app captures speaker loopback audio with WASAPI, resamples to 48 kHz stereo PCM16, and streams frames to the connected iPhone.
+
+## Legacy Python client setup
 
 1. Install Python 3.11+.
 2. Create a virtual environment if you want one.
@@ -71,7 +80,7 @@ Optional flags:
 
 The Python client stores a stable ID in `~/.remotesound-client-id` unless you override it with `--client-id`.
 
-## Python tone client setup
+## Legacy Python tone client setup
 
 Use the tone client when you want deterministic, repeatable mixer tests without relying on microphone capture.
 
@@ -98,7 +107,7 @@ This is the easiest way to verify that:
 
 The browser client can do a lighter-weight version of the same test by setting `Source Mode` to `Synthetic Tone`, choosing a different frequency on each device or browser tab, and optionally switching the waveform for stronger EQ contrast. Each tab now gets its own default `clientID`, and you can also override it manually from the page.
 
-## Browser client setup
+## Legacy browser client setup
 
 1. Use a modern browser with `getUserMedia`, `getDisplayMedia`, and `AudioWorklet` support. Chrome or Edge is recommended for speaker/tab-audio capture.
 2. Serve [`client/web`](/C:/Users/yussy/Documents/RemoteSound/client/web/index.html) from `localhost` or another secure origin.
@@ -116,7 +125,7 @@ Then open [http://localhost:8080](http://localhost:8080).
 
 ## Runtime behavior
 
-- Each connected source appears in the SwiftUI list as soon as the socket opens.
+- The connected Windows source appears in the SwiftUI list after the iPhone receives the source hello message.
 - Volume changes apply on the source mixer node immediately.
 - EQ changes update a dedicated `AVAudioUnitEQ` for that source.
 - Disabling a source mutes it without dropping the WebSocket connection.
@@ -124,28 +133,29 @@ Then open [http://localhost:8080](http://localhost:8080).
 - Per-source mute, gain, and EQ settings are restored when a client reconnects with the same `clientID`.
 - If the same `clientID` reconnects, RemoteSound promotes the newest connection and retires the older one.
 - The detail view shows queued buffers, dropped frames, received frame count, and the last frame timestamp for each live source.
-- Inactive sources are removed automatically if they stop sending frames or never complete the opening handshake.
+- The iOS app automatically reconnects to the configured Windows source if the WebSocket drops while the app is supposed to stay connected.
 - Operators can reset a source's saved mix settings or disconnect that source directly from the detail pane.
 - The app observes audio-session interruptions and route changes, then tries to reactivate playback when the app becomes active again.
 
 ## Suggested verification flow
 
-1. Launch the iOS app on a physical device and confirm a `ws://` address appears.
-2. Start `python client/python/tone_client.py --host <iphone-ip> --count 3`.
-3. Confirm three sources appear in the list with distinct names and client IDs.
-4. Mute one source and verify the other tones continue.
-5. Change the volume and EQ of only one source and verify the timbre or loudness shifts without affecting the others.
-6. Stop the tone client, restart it with the same `--client-id-prefix`, and verify the previous per-source settings return.
+1. Start the Windows speaker server.
+2. Launch the iOS app on a physical device and leave `Auto-connect discovered source` enabled.
+3. Confirm the Windows source appears in the list.
+4. Play audio on Windows and verify it plays through the iPhone.
+5. Send the iOS app to the Home screen and verify playback continues.
+6. Return to the app and verify the source is still connected.
 
 ## Important iOS constraints
 
 - Background audio playback is supported by the current configuration.
-- Long-lived background listening for new arbitrary LAN socket connections is still subject to normal iOS background execution limits. In practice, active playback sessions are the safest path; accepting brand-new connections after the app has been suspended is not something iOS guarantees.
-- The current implementation intentionally keeps the streaming format fixed at 48 kHz stereo PCM16 to keep the server-side mixer simple and predictable.
+- iOS now acts as an outbound WebSocket client instead of a LAN server, which better matches iOS background audio behavior.
+- Discovery uses Bonjour/mDNS service type `_remoteaudio._tcp`. Some guest Wi-Fi networks block multicast discovery; manual `ws://` entry remains available for those networks.
+- The current implementation intentionally keeps the streaming format fixed at 48 kHz stereo PCM16 to keep the mixer simple and predictable.
 
 ## Next upgrades I recommend
 
 - Add adaptive drift correction instead of the current fixed lead-buffer approach if clients will connect over unstable Wi-Fi.
 - Add per-source latency meters and clipping indicators.
 - Persist per-source EQ presets.
-- Add Bonjour advertising plus a companion native client if zero-config discovery on phones is important.
+- Add a visible discovered-source list if multiple Windows senders are expected on the same LAN.

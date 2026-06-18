@@ -12,19 +12,27 @@ final class AppModel {
     var serverIsRunning = false
     var audioStatusMessage = "Preparing audio session..."
     var localAddresses: [String] = []
+    var remoteURLString = UserDefaults.standard.string(forKey: "RemoteSound.RemoteURL") ?? "ws://192.168.1.10:8765/"
+    var autoConnectDiscoveredSource = UserDefaults.standard.object(forKey: "RemoteSound.AutoConnectDiscoveredSource") as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(autoConnectDiscoveredSource, forKey: "RemoteSound.AutoConnectDiscoveredSource")
+            updateDiscoveryState()
+        }
+    }
+    var discoveryMessage = "Discovery idle."
     var sources: [RemoteSourceState] = []
     var selectedSourceID: UUID?
     var selectedStableSourceID: String?
 
     private let mixer = AudioMixerController()
     private let settingsStore = SourceSettingsStore()
-    private var server: WebSocketAudioServer?
+    private let client = WebSocketAudioClient()
+    private let serviceBrowser = RemoteAudioServiceBrowser()
     private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
 
     init() {
-        server = WebSocketAudioServer(port: serverPort)
-        localAddresses = LocalNetworkAddressProvider.ipv4Addresses()
-        wireServerCallbacks()
+        wireClientCallbacks()
+        wireDiscoveryCallbacks()
 
         Task {
             start()
@@ -48,6 +56,25 @@ final class AppModel {
         localAddresses = LocalNetworkAddressProvider.ipv4Addresses()
     }
 
+    func connectToRemoteSource() {
+        let trimmedURL = remoteURLString.trimmingCharacters(in: .whitespacesAndNewlines)
+        remoteURLString = trimmedURL
+        UserDefaults.standard.set(trimmedURL, forKey: "RemoteSound.RemoteURL")
+
+        guard let url = URL(string: trimmedURL),
+              url.scheme == "ws" || url.scheme == "wss" else {
+            serverIsRunning = false
+            serverMessage = "Enter a ws:// or wss:// URL for the Windows source."
+            return
+        }
+
+        client.connect(to: url)
+    }
+
+    func disconnectRemoteSource() {
+        client.disconnect()
+    }
+
     func handleScenePhase(_ phase: ScenePhase) {
         let backgroundTimeRemaining = UIApplication.shared.backgroundTimeRemaining
         NSLog(
@@ -60,20 +87,20 @@ final class AppModel {
         switch phase {
         case .active:
             endBackgroundAudioTask()
-            server?.restartIfNeeded()
-            server?.logDebugState(reason: "scene became active")
+            client.reconnectIfNeeded()
+            client.logDebugState(reason: "scene became active")
             mixer.reactivateIfNeeded(reason: "app became active")
             mixer.logDebugState(reason: "scene became active")
         case .inactive:
             beginBackgroundAudioTaskIfNeeded()
-            server?.restartIfNeeded()
-            server?.logDebugState(reason: "scene became inactive")
+            client.reconnectIfNeeded()
+            client.logDebugState(reason: "scene became inactive")
             mixer.prepareForBackgroundPlayback()
             mixer.logDebugState(reason: "scene became inactive")
         case .background:
             beginBackgroundAudioTaskIfNeeded()
-            server?.restartIfNeeded()
-            server?.logDebugState(reason: "scene entered background")
+            client.reconnectIfNeeded()
+            client.logDebugState(reason: "scene entered background")
             mixer.prepareForBackgroundPlayback()
             mixer.logDebugState(reason: "scene entered background")
         default:
@@ -147,7 +174,7 @@ final class AppModel {
     }
 
     func disconnectSource(id: UUID) {
-        server?.disconnectSource(id: id)
+        client.disconnectSource(id: id)
     }
 
     private func applyEqualizer(for index: Int) {
@@ -191,21 +218,13 @@ final class AppModel {
             return
         }
 
-        do {
-            try server?.start()
-            serverIsRunning = true
-            serverMessage = "Listening for WebSocket audio sources on port \(serverPort)."
-            audioStatusMessage = "Audio session active."
-        } catch {
-            serverIsRunning = false
-            let nsError = error as NSError
-            serverMessage = "Server startup failed: \(error.localizedDescription) (\(nsError.domain) code \(nsError.code))"
-            audioStatusMessage = "Server failed: \(error.localizedDescription) (\(nsError.domain) code \(nsError.code))"
-            NSLog("Server start error: %@", nsError)
-        }
+        serverIsRunning = false
+        serverMessage = "Ready to connect to a Windows audio source."
+        audioStatusMessage = "Audio session active."
+        updateDiscoveryState()
     }
 
-    private func wireServerCallbacks() {
+    private func wireClientCallbacks() {
         let mixer = mixer
 
         mixer.onStatusMessage = { [weak self] message in
@@ -227,19 +246,18 @@ final class AppModel {
             }
         }
 
-        server?.onServerStateChange = { [weak self] message in
+        client.onConnectionStateChange = { [weak self] message, isConnected in
             Task { @MainActor in
                 guard let self else {
                     return
                 }
 
                 self.serverMessage = message
-                let lowered = message.lowercased()
-                self.serverIsRunning = !lowered.contains("failed") && !lowered.contains("stopped")
+                self.serverIsRunning = isConnected
             }
         }
 
-        server?.onSourceConnected = { [weak self] descriptor in
+        client.onSourceConnected = { [weak self] descriptor in
             Task { @MainActor in
                 guard let self else {
                     return
@@ -257,7 +275,7 @@ final class AppModel {
             }
         }
 
-        server?.onSourceUpdated = { [weak self] descriptor in
+        client.onSourceUpdated = { [weak self] descriptor in
             Task { @MainActor in
                 guard let self,
                       let index = self.sources.firstIndex(where: { $0.id == descriptor.id }) else {
@@ -279,7 +297,7 @@ final class AppModel {
             }
         }
 
-        server?.onSourceDisconnected = { [weak self] id in
+        client.onSourceDisconnected = { [weak self] id in
             Task { @MainActor in
                 guard let self else {
                     return
@@ -295,7 +313,7 @@ final class AppModel {
             }
         }
 
-        server?.onAudioFrame = { [weak self] id, payload in
+        client.onAudioFrame = { [weak self] id, payload in
             guard let self else {
                 return
             }
@@ -310,6 +328,38 @@ final class AppModel {
             }
 
             mixer.enqueuePCM16Frame(payload, for: id)
+        }
+    }
+
+    private func wireDiscoveryCallbacks() {
+        serviceBrowser.onStatusChange = { [weak self] message in
+            Task { @MainActor in
+                self?.discoveryMessage = message
+            }
+        }
+
+        serviceBrowser.onServiceFound = { [weak self] url, name in
+            Task { @MainActor in
+                guard let self, self.autoConnectDiscoveredSource else {
+                    return
+                }
+
+                if self.serverIsRunning, self.remoteURLString == url.absoluteString {
+                    return
+                }
+
+                self.remoteURLString = url.absoluteString
+                self.serverMessage = "Found \(name). Connecting..."
+                self.connectToRemoteSource()
+            }
+        }
+    }
+
+    private func updateDiscoveryState() {
+        if autoConnectDiscoveredSource {
+            serviceBrowser.start()
+        } else {
+            serviceBrowser.stop()
         }
     }
 
@@ -376,7 +426,7 @@ final class AppModel {
         let shouldFollowUpdatedSource = duplicates.contains(where: { $0.id == selectedSourceID || $0.stableID == selectedStableSourceID })
 
         for duplicate in duplicates {
-            server?.disconnectSource(id: duplicate.id)
+            client.disconnectSource(id: duplicate.id)
         }
 
         if shouldFollowUpdatedSource {

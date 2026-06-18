@@ -6,6 +6,7 @@ internal sealed class MainForm : Form
 {
     private readonly AppSettings _settings;
     private readonly AudioLoopbackCaptureService _captureService = new();
+    private RemoteSoundWebSocketAudioServer? _server;
     private RemoteSoundWebSocketClient? _client;
     private List<AudioDeviceInfo> _devices = [];
     private bool _isDisconnecting;
@@ -26,7 +27,7 @@ internal sealed class MainForm : Form
     public MainForm()
     {
         _settings = SettingsStore.Load();
-        Text = "RemoteSound Speaker Client";
+        Text = "RemoteSound Speaker Server";
         AutoScaleMode = AutoScaleMode.Dpi;
         MinimumSize = new Size(780, 640);
         Size = new Size(900, 700);
@@ -60,7 +61,7 @@ internal sealed class MainForm : Form
     {
         SaveSettingsFromUi();
         SettingsStore.Save(_settings);
-        await DisconnectInternalAsync().ConfigureAwait(false);
+        await StopServerInternalAsync().ConfigureAwait(false);
         _captureService.Dispose();
         base.OnFormClosing(e);
     }
@@ -118,7 +119,7 @@ internal sealed class MainForm : Form
         var subtitle = new Label
         {
             AutoSize = false,
-            Text = "Windows speaker loopback client · 48 kHz stereo PCM",
+            Text = "Windows speaker loopback server - 48 kHz stereo PCM",
             ForeColor = Color.FromArgb(190, 220, 230, 245),
             Location = new Point(2, 42),
             Size = new Size(480, 22),
@@ -188,13 +189,13 @@ internal sealed class MainForm : Form
 
         parent.Controls.Add(grid);
 
-        AddLabel(grid, "接続先", 0, 0);
+        AddLabel(grid, "Listen Port", 0, 0);
         StyleCombo(_serverUrlBox);
         _serverUrlBox.DropDownStyle = ComboBoxStyle.DropDown;
         grid.Controls.Add(_serverUrlBox, 1, 0);
         grid.SetColumnSpan(_serverUrlBox, 3);
 
-        AddLabel(grid, "ソース名", 0, 1);
+        AddLabel(grid, "Source Name", 0, 1);
         StyleTextBox(_sourceNameBox);
         grid.Controls.Add(_sourceNameBox, 1, 1);
         grid.SetColumnSpan(_sourceNameBox, 3);
@@ -205,21 +206,21 @@ internal sealed class MainForm : Form
         grid.Controls.Add(_clientIdBox, 1, 2);
         grid.SetColumnSpan(_clientIdBox, 2);
 
-        var newIdButton = new ModernButton { Text = "再生成", AccentColor = Color.FromArgb(75, 85, 99), Dock = DockStyle.Fill, Margin = new Padding(8, 2, 0, 4) };
+        var newIdButton = new ModernButton { Text = "New ID", AccentColor = Color.FromArgb(75, 85, 99), Dock = DockStyle.Fill, Margin = new Padding(8, 2, 0, 4) };
         newIdButton.Click += (_, _) => _clientIdBox.Text = Guid.NewGuid().ToString();
         grid.Controls.Add(newIdButton, 3, 2);
 
-        AddLabel(grid, "スピーカー", 0, 3);
+        AddLabel(grid, "Speaker", 0, 3);
         StyleCombo(_deviceBox);
         _deviceBox.DropDownStyle = ComboBoxStyle.DropDownList;
         grid.Controls.Add(_deviceBox, 1, 3);
         grid.SetColumnSpan(_deviceBox, 2);
 
-        var refreshButton = new ModernButton { Text = "更新", AccentColor = Color.FromArgb(75, 85, 99), Dock = DockStyle.Fill, Margin = new Padding(8, 2, 0, 4) };
+        var refreshButton = new ModernButton { Text = "Refresh", AccentColor = Color.FromArgb(75, 85, 99), Dock = DockStyle.Fill, Margin = new Padding(8, 2, 0, 4) };
         refreshButton.Click += (_, _) => RefreshDevices();
         grid.Controls.Add(refreshButton, 3, 3);
 
-        AddLabel(grid, "ゲイン", 0, 4);
+        AddLabel(grid, "Gain", 0, 4);
         _gainBar.Minimum = 0;
         _gainBar.Maximum = 300;
         _gainBar.TickFrequency = 50;
@@ -266,22 +267,22 @@ internal sealed class MainForm : Form
         _statusLabel.Dock = DockStyle.Fill;
         grid.Controls.Add(_statusLabel, 0, 0);
 
-        _connectButton.Text = "Connect";
+        _connectButton.Text = "Start";
         _connectButton.Dock = DockStyle.Fill;
         _connectButton.Margin = new Padding(8, 0, 0, 0);
         _connectButton.MinimumSize = new Size(0, 40);
-        _connectButton.Click += async (_, _) => await ConnectInternalAsync().ConfigureAwait(false);
+        _connectButton.Click += async (_, _) => await StartServerInternalAsync().ConfigureAwait(false);
         grid.Controls.Add(_connectButton, 1, 0);
 
-        _disconnectButton.Text = "Disconnect";
+        _disconnectButton.Text = "Stop";
         _disconnectButton.AccentColor = Color.FromArgb(220, 86, 86);
         _disconnectButton.Dock = DockStyle.Fill;
         _disconnectButton.Margin = new Padding(8, 0, 0, 0);
         _disconnectButton.MinimumSize = new Size(0, 40);
-        _disconnectButton.Click += async (_, _) => await DisconnectInternalAsync().ConfigureAwait(false);
+        _disconnectButton.Click += async (_, _) => await StopServerInternalAsync().ConfigureAwait(false);
         grid.Controls.Add(_disconnectButton, 2, 0);
 
-        _autoReconnectBox.Text = "Auto reconnect";
+        _autoReconnectBox.Text = "Accept reconnects";
         _autoReconnectBox.ForeColor = Color.FromArgb(220, 240, 245, 255);
         _autoReconnectBox.BackColor = Color.Transparent;
         _autoReconnectBox.Dock = DockStyle.Fill;
@@ -342,7 +343,7 @@ internal sealed class MainForm : Form
 
     private void WireEvents()
     {
-        _captureService.FrameReady += frame => _client?.TryQueueAudioFrame(frame);
+        _captureService.FrameReady += frame => _server?.TryQueueAudioFrame(frame);
         _captureService.LevelChanged += level => BeginInvokeSafe(() => _levelBar.Value = level);
         _captureService.Log += AppendLog;
     }
@@ -350,11 +351,9 @@ internal sealed class MainForm : Form
     private void LoadSettingsIntoUi()
     {
         _serverUrlBox.Items.Clear();
-        foreach (var url in _settings.RecentServerUrls)
-        {
-            _serverUrlBox.Items.Add(url);
-        }
-        _serverUrlBox.Text = _settings.ServerUrl;
+        _serverUrlBox.Items.Add("8765");
+        _serverUrlBox.Items.Add("8080");
+        _serverUrlBox.Text = _settings.ListenPort.ToString();
         _sourceNameBox.Text = _settings.SourceName;
         _clientIdBox.Text = _settings.ClientId;
         _gainBar.Value = Math.Clamp(_settings.GainPercent, _gainBar.Minimum, _gainBar.Maximum);
@@ -364,7 +363,10 @@ internal sealed class MainForm : Form
 
     private void SaveSettingsFromUi()
     {
-        SettingsStore.RememberServerUrl(_settings, _serverUrlBox.Text);
+        if (int.TryParse(_serverUrlBox.Text.Trim(), out var listenPort))
+        {
+            _settings.ListenPort = Math.Clamp(listenPort, 1_024, 65_535);
+        }
         _settings.SourceName = _sourceNameBox.Text.Trim();
         _settings.ClientId = _clientIdBox.Text.Trim();
         _settings.GainPercent = _gainBar.Value;
@@ -400,6 +402,84 @@ internal sealed class MainForm : Form
         catch (Exception ex)
         {
             AppendLog("Device refresh failed: " + ex.Message);
+        }
+    }
+
+    private async Task StartServerInternalAsync()
+    {
+        if (_server?.IsRunning == true)
+        {
+            return;
+        }
+
+        try
+        {
+            SaveSettingsFromUi();
+            SettingsStore.Save(_settings);
+            SetStatus("Starting ...");
+            SetConnected(false, busy: true);
+
+            if (!int.TryParse(_serverUrlBox.Text.Trim(), out var port) || port < 1_024 || port > 65_535)
+            {
+                throw new InvalidOperationException("Listen port must be between 1024 and 65535.");
+            }
+            _settings.ListenPort = port;
+
+            var selectedDevice = _deviceBox.SelectedItem as AudioDeviceInfo;
+            var server = new RemoteSoundWebSocketAudioServer();
+            server.Log += AppendLog;
+            server.ClientConnected += () => BeginInvokeSafe(() => SetStatus("iPhone connected - streaming speaker output"));
+            server.ClientDisconnected += () => BeginInvokeSafe(() => SetStatus(_server?.IsRunning == true ? "Waiting for iPhone receiver" : "Idle"));
+            _server = server;
+
+            await server.StartAsync(_settings.ListenPort, _settings.SourceName, _settings.ClientId, CancellationToken.None).ConfigureAwait(false);
+            _captureService.Start(selectedDevice?.Id, _settings.Gain);
+
+            BeginInvokeSafe(() =>
+            {
+                SetConnected(true);
+                SetStatus("Waiting for iPhone receiver");
+            });
+        }
+        catch (Exception ex)
+        {
+            AppendLog("Start failed: " + ex.Message);
+            await StopServerInternalAsync().ConfigureAwait(false);
+            BeginInvokeSafe(() =>
+            {
+                SetConnected(false);
+                SetStatus("Start failed");
+            });
+        }
+    }
+
+    private async Task StopServerInternalAsync()
+    {
+        if (_isDisconnecting)
+        {
+            return;
+        }
+
+        _isDisconnecting = true;
+        try
+        {
+            BeginInvokeSafe(() => SetStatus("Stopping ..."));
+            _captureService.Stop();
+            if (_server is not null)
+            {
+                await _server.DisposeAsync().ConfigureAwait(false);
+                _server = null;
+            }
+        }
+        finally
+        {
+            _isDisconnecting = false;
+            BeginInvokeSafe(() =>
+            {
+                _levelBar.Value = 0;
+                SetConnected(false);
+                SetStatus("Idle");
+            });
         }
     }
 

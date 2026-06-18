@@ -7,6 +7,7 @@ internal sealed class AppSettings
 {
     public string ServerUrl { get; set; } = "ws://192.168.1.10:8080";
     public List<string> RecentServerUrls { get; set; } = [];
+    public int ListenPort { get; set; } = 8_765;
     public string SourceName { get; set; } = Environment.MachineName + " Speaker";
     public string ClientId { get; set; } = Guid.NewGuid().ToString();
     public string? LastRenderDeviceId { get; set; }
@@ -92,6 +93,7 @@ internal static class SettingsStore
             : Guid.NewGuid().ToString();
 
         settings.GainPercent = Math.Clamp(settings.GainPercent, 0, 300);
+        settings.ListenPort = Math.Clamp(settings.ListenPort <= 0 ? 8_765 : settings.ListenPort, 1_024, 65_535);
 
         settings.RecentServerUrls = settings.RecentServerUrls
             .Where(x => !string.IsNullOrWhiteSpace(x))
