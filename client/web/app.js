@@ -1,6 +1,6 @@
 const SAMPLE_RATE = 48_000;
 const FRAME_SAMPLES = 960;
-const CHANNELS = 1;
+const CHANNELS = 2;
 
 const urlInput = document.querySelector("#url");
 const modeInput = document.querySelector("#mode");
@@ -61,7 +61,7 @@ async function ensureAudioPipeline() {
 
   if (!workletNode) {
     workletNode = new AudioWorkletNode(audioContext, "pcm-capture-processor", {
-      processorOptions: { frameSamples: FRAME_SAMPLES },
+      processorOptions: { frameSamples: FRAME_SAMPLES, channels: CHANNELS },
       numberOfInputs: 1,
       numberOfOutputs: 0,
       channelCount: CHANNELS,

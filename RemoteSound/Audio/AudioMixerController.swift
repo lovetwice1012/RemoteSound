@@ -56,7 +56,6 @@ final class AudioMixerController {
     private let engine = AVAudioEngine()
     private let engineQueue = DispatchQueue(label: "RemoteSound.AudioMixer")
     private let sampleRate: Double
-    private let channelCount: AVAudioChannelCount
     private let minimumLeadBufferCount = 3
     private let targetLeadBufferCount = 6
     private let maximumQueuedBufferCount = 18
@@ -65,9 +64,8 @@ final class AudioMixerController {
     var onSourceStatsChanged: ((UUID, AudioSourceRuntimeStats) -> Void)?
     var onStatusMessage: ((String) -> Void)?
 
-    init(sampleRate: Double = 48_000, channelCount: AVAudioChannelCount = 1) {
+    init(sampleRate: Double = 48_000) {
         self.sampleRate = sampleRate
-        self.channelCount = channelCount
         installNotificationObservers()
     }
 
@@ -112,24 +110,30 @@ final class AudioMixerController {
         reactivateSession(reason: reason)
     }
 
-    func registerSource(id: UUID) {
+    func registerSource(id: UUID, sampleRate: Double, channelCount: AVAudioChannelCount) {
         engineQueue.async {
-            guard self.channels[id] == nil else {
+            if let existingChannel = self.channels[id] {
+                if existingChannel.format.sampleRate == sampleRate, existingChannel.format.channelCount == channelCount {
+                    return
+                }
+
+                self.removeSourceChannel(id: id, channel: existingChannel)
+            }
+
+            guard sampleRate > 0, channelCount > 0 else {
+                NSLog("AudioMixerController.registerSource: invalid format sampleRate=%f channelCount=%u", sampleRate, channelCount)
                 return
             }
 
-            // Use the active audio session's sample rate when available to avoid format mismatches.
-            let sessionSampleRate = AVAudioSession.sharedInstance().sampleRate
-            let effectiveSampleRate = sessionSampleRate > 0 ? sessionSampleRate : self.sampleRate
-
             let format = AVAudioFormat(
                 commonFormat: .pcmFormatFloat32,
-                sampleRate: effectiveSampleRate,
-                channels: self.channelCount,
+                sampleRate: sampleRate,
+                channels: channelCount,
                 interleaved: false
             )
 
             guard let format else {
+                NSLog("AudioMixerController.registerSource: failed to create AVAudioFormat sampleRate=%f channelCount=%u", sampleRate, channelCount)
                 return
             }
 
@@ -151,19 +155,11 @@ final class AudioMixerController {
 
     func unregisterSource(id: UUID) {
         engineQueue.async {
-            guard let channel = self.channels.removeValue(forKey: id) else {
+            guard let channel = self.channels[id] else {
                 return
             }
 
-            channel.pendingBuffers.removeAll()
-            channel.playerNode.stop()
-            self.engine.disconnectNodeInput(channel.equalizer)
-            self.engine.disconnectNodeOutput(channel.playerNode)
-            self.engine.disconnectNodeOutput(channel.equalizer)
-            self.engine.disconnectNodeOutput(channel.volumeNode)
-            self.engine.detach(channel.playerNode)
-            self.engine.detach(channel.equalizer)
-            self.engine.detach(channel.volumeNode)
+            self.removeSourceChannel(id: id, channel: channel)
         }
     }
 
@@ -226,51 +222,49 @@ final class AudioMixerController {
 
     private func configureSession() throws {
         let session = AVAudioSession.sharedInstance()
-
-        try audioStep("setCategory(playback)") {
+        try audioStep("setCategory") {
             try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
         }
 
-        // Preferred values are hints. Keep startup alive if the current route rejects them.
+        // Try to request the preferred sample rate and IO buffer duration, but don't fail if unavailable.
         do {
-            try audioStep("setPreferredSampleRate") {
-                try session.setPreferredSampleRate(sampleRate)
-            }
+            try session.setPreferredSampleRate(sampleRate)
         } catch {
-            NSLog("setPreferredSampleRate ignored: %@", error as NSError)
+            NSLog("setPreferredSampleRate failed: %@", error as NSError)
         }
 
         do {
-            try audioStep("setPreferredIOBufferDuration") {
-                try session.setPreferredIOBufferDuration(0.02)
-            }
+            try session.setPreferredIOBufferDuration(0.02)
         } catch {
-            NSLog("setPreferredIOBufferDuration ignored: %@", error as NSError)
+            NSLog("setPreferredIOBufferDuration failed: %@", error as NSError)
         }
 
         try audioStep("setActive") {
             try session.setActive(true)
         }
-
-        NSLog(
-            "Audio session active: category=%@ mode=%@ sampleRate=%f ioBufferDuration=%f outputChannels=%ld route=%@",
-            session.category.rawValue,
-            session.mode.rawValue,
-            session.sampleRate,
-            session.ioBufferDuration,
-            session.outputNumberOfChannels,
-            String(describing: session.currentRoute)
-        )
     }
 
     private func audioStep(_ name: String, _ body: () throws -> Void) throws {
         do {
             try body()
-            NSLog("Audio OK: %@", name)
+            NSLog("AudioMixerController.configureSession OK: %@", name)
         } catch {
-            NSLog("Audio FAILED: %@: %@", name, error as NSError)
+            NSLog("AudioMixerController.configureSession FAILED: %@ %@", name, error as NSError)
             throw error
         }
+    }
+
+    private func removeSourceChannel(id: UUID, channel: SourceChannel) {
+        channels.removeValue(forKey: id)
+        channel.pendingBuffers.removeAll()
+        channel.playerNode.stop()
+        engine.disconnectNodeInput(channel.equalizer)
+        engine.disconnectNodeOutput(channel.playerNode)
+        engine.disconnectNodeOutput(channel.equalizer)
+        engine.disconnectNodeOutput(channel.volumeNode)
+        engine.detach(channel.playerNode)
+        engine.detach(channel.equalizer)
+        engine.detach(channel.volumeNode)
     }
 
     private func installNotificationObservers() {
@@ -416,8 +410,12 @@ final class AudioMixerController {
 
     private static func makeBuffer(from payload: Data, format: AVAudioFormat) -> AVAudioPCMBuffer? {
         let channelCount = Int(format.channelCount)
+        guard channelCount > 0, payload.count.isMultiple(of: MemoryLayout<Int16>.size) else {
+            return nil
+        }
+
         let sampleCount = payload.count / MemoryLayout<Int16>.size
-        guard channelCount > 0, sampleCount >= channelCount else {
+        guard sampleCount >= channelCount, sampleCount.isMultiple(of: channelCount) else {
             return nil
         }
 
@@ -437,7 +435,7 @@ final class AudioMixerController {
             for frame in 0..<frameCount {
                 for channel in 0..<channelCount {
                     let sampleIndex = (frame * channelCount) + channel
-                    let normalized = Float(samples[sampleIndex]) / Float(Int16.max)
+                    let normalized = max(-1.0, Float(samples[sampleIndex]) / 32768.0)
                     floatChannels[channel][frame] = normalized
                 }
             }

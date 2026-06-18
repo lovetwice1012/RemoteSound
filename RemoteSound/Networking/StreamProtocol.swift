@@ -22,5 +22,6 @@ struct SourceDescriptor: Sendable {
     var stableID: String
     var endpointDescription: String
     var sampleRate: Double
+    var channels: Int
     var codec: String
 }

@@ -12,7 +12,7 @@ import sounddevice as sd
 import websockets
 
 SAMPLE_RATE = 48_000
-CHANNELS = 1
+CHANNELS = 2
 FRAME_SAMPLES = 960
 
 
@@ -68,7 +68,11 @@ async def stream_microphone(uri: str, client_name: str, client_id: str, device_n
         if frames == 0:
             return
 
-        scaled = (indata[:, 0] * gain).clip(-1.0, 1.0)
+        if indata.ndim != 2 or indata.shape[1] < CHANNELS:
+            callback_errors.put(f"expected {CHANNELS} input channels, got shape={indata.shape}")
+            return
+
+        scaled = (indata[:, :CHANNELS] * gain).clip(-1.0, 1.0)
         pcm = (scaled * 32767.0).astype("<i2", copy=False).tobytes()
 
         def enqueue() -> None:

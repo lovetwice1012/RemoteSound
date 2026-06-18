@@ -9,7 +9,7 @@ import numpy as np
 import websockets
 
 SAMPLE_RATE = 48_000
-CHANNELS = 1
+CHANNELS = 2
 FRAME_SAMPLES = 960
 FRAME_DURATION_SECONDS = FRAME_SAMPLES / SAMPLE_RATE
 WAVEFORMS = ("sine", "square", "sawtooth", "triangle")
@@ -44,7 +44,8 @@ def make_waveform(phase: float, frequency: float, waveform: str) -> np.ndarray:
 def make_frame(phase: float, frequency: float, gain: float, waveform: str) -> tuple[bytes, float]:
     raw_waveform = make_waveform(phase, frequency, waveform) * gain
     pcm = np.clip(raw_waveform, -1.0, 1.0)
-    payload = (pcm * 32767.0).astype("<i2", copy=False).tobytes()
+    stereo_pcm = np.column_stack((pcm, pcm)).astype(np.float32, copy=False)
+    payload = (stereo_pcm * 32767.0).astype("<i2", copy=False).tobytes()
     next_phase = (phase + FRAME_SAMPLES) % SAMPLE_RATE
     return payload, next_phase
 

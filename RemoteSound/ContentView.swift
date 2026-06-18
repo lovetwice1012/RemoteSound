@@ -134,6 +134,7 @@ private struct SourceDetailView: View {
                 LabeledContent("Client ID", value: source.stableID)
                 LabeledContent("Endpoint", value: source.endpointDescription)
                 LabeledContent("Codec", value: source.codec)
+                LabeledContent("Channels", value: "\(source.channels)")
                 LabeledContent("Sample Rate", value: "\(Int(source.sampleRate)) Hz")
                 LabeledContent("Connected", value: source.connectedAt.formatted(date: .omitted, time: .standard))
             }

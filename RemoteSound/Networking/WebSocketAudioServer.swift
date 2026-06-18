@@ -107,6 +107,7 @@ final class WebSocketAudioServer {
             stableID: id.uuidString,
             endpointDescription: Self.endpointDescription(for: connection.endpoint),
             sampleRate: 48_000,
+            channels: 2,
             codec: "pcm_s16le"
         )
 
@@ -156,6 +157,11 @@ final class WebSocketAudioServer {
                 case .text:
                     self.handleTextMessage(data, for: context)
                 case .binary:
+                    guard context.hasCompletedHandshake else {
+                        self.send(event: ServerEvent(type: "error", message: "Send hello before audio frames.", sourceID: context.id.uuidString), to: context)
+                        break
+                    }
+
                     self.onAudioFrame?(context.id, data)
                 case .close:
                     self.removeConnection(id: context.id)
@@ -180,8 +186,17 @@ final class WebSocketAudioServer {
             return
         }
 
-        guard hello.channels == 1, hello.sampleRate == 48_000, hello.codec == "pcm_s16le" else {
-            send(event: ServerEvent(type: "error", message: "RemoteSound currently expects 48 kHz mono pcm_s16le.", sourceID: context.id.uuidString), to: context)
+        guard hello.channels == 2, hello.sampleRate == 48_000, hello.codec == "pcm_s16le" else {
+            send(event: ServerEvent(type: "error", message: "RemoteSound currently expects 48 kHz stereo pcm_s16le.", sourceID: context.id.uuidString), to: context)
+            context.connection.cancel()
+            removeConnection(id: context.id)
+            return
+        }
+
+        let bytesPerSample = MemoryLayout<Int16>.size
+        let bytesPerFrame = hello.channels * bytesPerSample
+        guard hello.frameSamples > 0, hello.frameSamples <= 4_096, bytesPerFrame > 0 else {
+            send(event: ServerEvent(type: "error", message: "Invalid audio frame settings.", sourceID: context.id.uuidString), to: context)
             context.connection.cancel()
             removeConnection(id: context.id)
             return
@@ -190,6 +205,7 @@ final class WebSocketAudioServer {
         context.descriptor.name = hello.name
         context.descriptor.stableID = hello.clientID?.nonEmpty ?? Self.makeFallbackStableID(name: hello.name, endpoint: context.descriptor.endpointDescription)
         context.descriptor.sampleRate = hello.sampleRate
+        context.descriptor.channels = hello.channels
         context.descriptor.codec = hello.codec
         context.hasCompletedHandshake = true
         context.lastActivityAt = Date()
@@ -198,7 +214,7 @@ final class WebSocketAudioServer {
         send(
             event: ServerEvent(
                 type: "accepted",
-                message: "Streaming \(hello.frameSamples) samples per frame.",
+                message: "Streaming \(hello.frameSamples) stereo frames per packet.",
                 sourceID: context.id.uuidString
             ),
             to: context

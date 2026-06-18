@@ -1,3 +1,4 @@
+import AVFAudio
 import Foundation
 import Observation
 import SwiftUI
@@ -191,8 +192,6 @@ final class AppModel {
                     return
                 }
 
-                mixer.registerSource(id: descriptor.id)
-
                 var source = RemoteSourceState.makeDefault(from: descriptor)
                 self.restoreStoredSettings(into: &source)
                 self.sources.append(source)
@@ -216,7 +215,9 @@ final class AppModel {
                 self.sources[index].stableID = descriptor.stableID
                 self.sources[index].endpointDescription = descriptor.endpointDescription
                 self.sources[index].sampleRate = descriptor.sampleRate
+                self.sources[index].channels = descriptor.channels
                 self.sources[index].codec = descriptor.codec
+                mixer.registerSource(id: descriptor.id, sampleRate: descriptor.sampleRate, channelCount: AVAudioChannelCount(descriptor.channels))
                 self.restoreStoredSettingsIfNeeded(for: index)
                 self.applySettingsToMixer(for: index)
                 self.handleDuplicateStableSource(updatedSourceID: descriptor.id, stableID: descriptor.stableID)

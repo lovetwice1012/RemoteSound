@@ -12,6 +12,7 @@ struct RemoteSourceState: Identifiable, Hashable {
     var midGain: Double
     var highGain: Double
     var sampleRate: Double
+    var channels: Int
     var codec: String
     var receivedFrameCount: Int
     var droppedFrameCount: Int
@@ -32,6 +33,7 @@ struct RemoteSourceState: Identifiable, Hashable {
             midGain: 0.0,
             highGain: 0.0,
             sampleRate: descriptor.sampleRate,
+            channels: descriptor.channels,
             codec: descriptor.codec,
             receivedFrameCount: 0,
             droppedFrameCount: 0,

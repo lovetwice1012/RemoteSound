@@ -2,8 +2,9 @@ class PcmCaptureProcessor extends AudioWorkletProcessor {
   constructor(options) {
     super();
     this.frameSamples = options.processorOptions.frameSamples ?? 960;
+    this.channels = options.processorOptions.channels ?? 2;
     this.gain = 1;
-    this.pending = new Float32Array(this.frameSamples);
+    this.pending = new Float32Array(this.frameSamples * this.channels);
     this.pendingFrames = 0;
 
     this.port.onmessage = ({ data }) => {
@@ -27,17 +28,21 @@ class PcmCaptureProcessor extends AudioWorkletProcessor {
 
     let peak = 0;
     for (let index = 0; index < left.length; index += 1) {
-      const mono = ((left[index] + right[index]) * 0.5) * this.gain;
-      const sample = Math.max(-1, Math.min(1, mono));
-      peak = Math.max(peak, Math.abs(sample));
+      const leftSample = Math.max(-1, Math.min(1, left[index] * this.gain));
+      const rightSample = Math.max(-1, Math.min(1, right[index] * this.gain));
+      peak = Math.max(peak, Math.abs(leftSample), Math.abs(rightSample));
 
-      this.pending[this.pendingFrames] = sample;
+      const pendingOffset = this.pendingFrames * this.channels;
+      this.pending[pendingOffset] = leftSample;
+      this.pending[pendingOffset + 1] = rightSample;
       this.pendingFrames += 1;
 
       if (this.pendingFrames === this.frameSamples) {
-        const payload = new Int16Array(this.frameSamples);
+        const payload = new Int16Array(this.frameSamples * this.channels);
         for (let frame = 0; frame < this.frameSamples; frame += 1) {
-          payload[frame] = Math.max(-32768, Math.min(32767, Math.round(this.pending[frame] * 32767)));
+          const frameOffset = frame * this.channels;
+          payload[frameOffset] = Math.max(-32768, Math.min(32767, Math.round(this.pending[frameOffset] * 32767)));
+          payload[frameOffset + 1] = Math.max(-32768, Math.min(32767, Math.round(this.pending[frameOffset + 1] * 32767)));
         }
 
         this.port.postMessage({ type: "audio", payload: payload.buffer }, [payload.buffer]);
