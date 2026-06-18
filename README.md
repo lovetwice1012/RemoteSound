@@ -1,19 +1,25 @@
 # RemoteSound
 
-RemoteSound is an iOS mixer app that connects to a LAN WebSocket audio source, mixes the received stream into the speaker output, and lets you change the source's enable state, volume, and EQ in real time.
+RemoteSound is an iOS audio receiver that prioritizes reliable background playback from a Windows speaker source.
 
 ## What is included
 
-- An iOS app scaffold driven by [`project.yml`](/C:/Users/yussy/Documents/RemoteSound/project.yml) with SwiftUI, `AVAudioEngine`, and a WebSocket receiving client.
+- An iOS app scaffold driven by [`project.yml`](/C:/Users/yussy/Documents/RemoteSound/project.yml) with SwiftUI, `AVPlayer` HLS playback, and a WebSocket fallback.
 - A per-source audio chain: `AVAudioPlayerNode -> AVAudioUnitEQ -> AVAudioMixerNode -> main mixer`.
 - A lightweight per-source jitter buffer so short Wi-Fi timing swings do not immediately underrun playback.
 - Runtime controls for enable or mute, gain, and a fixed three-band EQ per connected source.
-- A Windows speaker loopback server in [`client/windows/RemoteSound.WinForms`](/C:/Users/yussy/Documents/RemoteSound/client/windows/RemoteSound.WinForms) that accepts the iPhone connection and streams speaker audio.
+- A Windows speaker loopback server in [`client/windows/RemoteSound.WinForms`](/C:/Users/yussy/Documents/RemoteSound/client/windows/RemoteSound.WinForms) that serves a reliable HLS stream and also keeps a WebSocket fallback.
 - Legacy Python and browser clients are still present, but they target the previous iPhone-as-server transport.
 
 ## Protocol
 
-RemoteSound currently expects:
+Reliable mode uses:
+
+- HLS over HTTP on `http://<windows-pc-ip>:8766/stream.m3u8`
+- 2-second MP3 audio segments
+- `AVPlayer` on iOS for background playback
+
+Legacy WebSocket mode expects:
 
 - WebSocket transport on `ws://<windows-pc-ip>:8765/`
 - The Windows source sends one UTF-8 JSON `hello` message first
@@ -54,10 +60,10 @@ The app already declares `UIBackgroundModes = audio` and configures `AVAudioSess
 1. Build and run [`client/windows/RemoteSound.WinForms`](/C:/Users/yussy/Documents/RemoteSound/client/windows/RemoteSound.WinForms).
 2. Choose the speaker device and listen port. The default port is `8765`.
 3. Click `Start`.
-4. The Windows app advertises `_remoteaudio._tcp` on the local network. The iOS app auto-connects when discovery is enabled.
-5. If discovery is blocked by the network, copy one of the logged `ws://<pc-ip>:8765/` URLs into the iOS app and tap `Connect`.
+4. The Windows app logs a `Reliable iPhone URL`, usually `http://<pc-ip>:8766/stream.m3u8`.
+5. The iOS app auto-scans for the HLS stream when discovery is enabled. If needed, paste the reliable URL manually and tap `Connect`.
 
-The Windows app captures speaker loopback audio with WASAPI, resamples to 48 kHz stereo PCM16, and streams frames to the connected iPhone.
+The Windows app captures speaker loopback audio with WASAPI, resamples to 48 kHz stereo PCM16, encodes short MP3 segments, and serves them as a live HLS playlist.
 
 ## Legacy Python client setup
 
@@ -125,7 +131,7 @@ Then open [http://localhost:8080](http://localhost:8080).
 
 ## Runtime behavior
 
-- The connected Windows source appears in the SwiftUI list after the iPhone receives the source hello message.
+- Reliable HLS mode plays through `AVPlayer`; detailed per-source mixer controls apply only to legacy WebSocket mode.
 - Volume changes apply on the source mixer node immediately.
 - EQ changes update a dedicated `AVAudioUnitEQ` for that source.
 - Disabling a source mutes it without dropping the WebSocket connection.
@@ -133,7 +139,7 @@ Then open [http://localhost:8080](http://localhost:8080).
 - Per-source mute, gain, and EQ settings are restored when a client reconnects with the same `clientID`.
 - If the same `clientID` reconnects, RemoteSound promotes the newest connection and retires the older one.
 - The detail view shows queued buffers, dropped frames, received frame count, and the last frame timestamp for each live source.
-- The iOS app automatically reconnects to the configured Windows source if the WebSocket drops while the app is supposed to stay connected.
+- The iOS app can automatically scan for the reliable HLS stream on port `8766`.
 - Operators can reset a source's saved mix settings or disconnect that source directly from the detail pane.
 - The app observes audio-session interruptions and route changes, then tries to reactivate playback when the app becomes active again.
 
@@ -149,8 +155,8 @@ Then open [http://localhost:8080](http://localhost:8080).
 ## Important iOS constraints
 
 - Background audio playback is supported by the current configuration.
-- iOS now acts as an outbound WebSocket client instead of a LAN server, which better matches iOS background audio behavior.
-- Discovery uses Bonjour/mDNS service type `_remoteaudio._tcp`. Some guest Wi-Fi networks block multicast discovery; manual `ws://` entry remains available for those networks.
+- Reliable mode uses `AVPlayer` with HLS because that is the iOS path most aligned with background audio playback.
+- Discovery uses Bonjour/mDNS plus a TCP scan fallback. Some guest Wi-Fi networks block discovery; manual `http://...:8766/stream.m3u8` entry remains available.
 - The current implementation intentionally keeps the streaming format fixed at 48 kHz stereo PCM16 to keep the mixer simple and predictable.
 
 ## Next upgrades I recommend

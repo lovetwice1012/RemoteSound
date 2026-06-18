@@ -21,7 +21,7 @@ struct ContentView: View {
                     ContentUnavailableView(
                         "No Sources Connected",
                         systemImage: "waveform.badge.plus",
-                        description: Text("Start the Windows audio server on the same LAN, then connect to its WebSocket URL above.")
+                        description: Text("Start the Windows audio server on the same LAN, then connect to its reliable HLS URL above.")
                     )
                     .frame(maxHeight: .infinity)
                 } else {
@@ -69,7 +69,7 @@ private struct RemoteConnectionCard: View {
                 .font(.footnote)
                 .foregroundStyle(.secondary)
 
-            TextField("ws://192.168.1.10:8765/", text: $model.remoteURLString)
+            TextField("http://192.168.1.10:8766/stream.m3u8", text: $model.remoteURLString)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .keyboardType(.URL)
@@ -80,6 +80,11 @@ private struct RemoteConnectionCard: View {
                     model.connectToRemoteSource()
                 }
                 .buttonStyle(.borderedProminent)
+
+                Button("Scan") {
+                    model.scanForRemoteSources()
+                }
+                .buttonStyle(.bordered)
 
                 Button("Disconnect") {
                     model.disconnectRemoteSource()

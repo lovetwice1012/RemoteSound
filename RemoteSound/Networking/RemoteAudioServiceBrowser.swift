@@ -65,10 +65,10 @@ final class RemoteAudioServiceBrowser: NSObject, NetServiceBrowserDelegate, NetS
         }
 
         var components = URLComponents()
-        components.scheme = "ws"
+        components.scheme = "http"
         components.host = hostName.trimmingCharacters(in: CharacterSet(charactersIn: "."))
-        components.port = sender.port
-        components.path = path(from: sender)
+        components.port = sender.port + 1
+        components.path = "/stream.m3u8"
 
         guard let url = components.url else {
             return

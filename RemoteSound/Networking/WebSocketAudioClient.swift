@@ -11,8 +11,7 @@ final class WebSocketAudioClient {
     private let queue = DispatchQueue(label: "RemoteSound.WebSocketClient")
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
-    private var session: URLSession?
-    private var task: URLSessionWebSocketTask?
+    private var connection: NWConnection?
     private var pingTimer: DispatchSourceTimer?
     private var sourceID: UUID?
     private var sourceDescriptor: SourceDescriptor?
@@ -30,7 +29,7 @@ final class WebSocketAudioClient {
 
     func reconnectIfNeeded() {
         queue.async {
-            guard self.shouldStayConnected, self.task == nil, let desiredURL = self.desiredURL else {
+            guard self.shouldStayConnected, self.connection == nil, let desiredURL = self.desiredURL else {
                 return
             }
 
@@ -61,9 +60,9 @@ final class WebSocketAudioClient {
     func logDebugState(reason: String) {
         queue.async {
             NSLog(
-                "WebSocketAudioClient.debug: reason=%@ taskActive=%@ sourceID=%@ shouldStayConnected=%@",
+                "WebSocketAudioClient.debug: reason=%@ connectionActive=%@ sourceID=%@ shouldStayConnected=%@",
                 reason,
-                self.task == nil ? "false" : "true",
+                self.connection == nil ? "false" : "true",
                 self.sourceID?.uuidString ?? "nil",
                 self.shouldStayConnected ? "true" : "false"
             )
@@ -73,79 +72,117 @@ final class WebSocketAudioClient {
     private func startConnection(to url: URL) {
         disconnectLocked(reason: nil)
 
-        let configuration = URLSessionConfiguration.default
-        configuration.waitsForConnectivity = true
-        configuration.timeoutIntervalForRequest = 15
-        configuration.timeoutIntervalForResource = 0
+        let webSocketOptions = NWProtocolWebSocket.Options()
+        webSocketOptions.autoReplyPing = true
+        webSocketOptions.maximumMessageSize = 65_536
 
-        let session = URLSession(configuration: configuration)
-        let task = session.webSocketTask(with: url)
+        let tcpOptions = NWProtocolTCP.Options()
+        let parameters: NWParameters
+        if url.scheme == "wss" {
+            parameters = NWParameters(tls: NWProtocolTLS.Options(), tcp: tcpOptions)
+        } else {
+            parameters = NWParameters(tls: nil, tcp: tcpOptions)
+        }
+        parameters.defaultProtocolStack.applicationProtocols.insert(webSocketOptions, at: 0)
+
+        let connection = NWConnection(to: .url(url), using: parameters)
         let id = UUID()
 
-        self.session = session
-        self.task = task
+        self.connection = connection
         self.sourceID = id
         self.sourceDescriptor = nil
 
         onConnectionStateChange?("Connecting to \(url.absoluteString) ...", false)
         NSLog("WebSocketAudioClient: connecting to %@", url.absoluteString)
 
-        task.resume()
-        startPingTimer(for: task)
-        receiveNext(from: task, sourceID: id)
-    }
-
-    private func receiveNext(from task: URLSessionWebSocketTask, sourceID: UUID) {
-        task.receive { [weak self] result in
-            guard let self else {
+        connection.stateUpdateHandler = { [weak self, weak connection] state in
+            guard let self, let connection else {
                 return
             }
 
             self.queue.async {
-                guard self.task === task else {
+                guard self.connection === connection else {
                     return
                 }
 
-                switch result {
-                case .success(let message):
-                    self.handle(message, from: task, sourceID: sourceID)
-                    if self.task === task {
-                        self.receiveNext(from: task, sourceID: sourceID)
-                    }
-                case .failure(let error):
-                    let nsError = error as NSError
-                    NSLog("WebSocketAudioClient.receive failed: %@", nsError)
+                switch state {
+                case .ready:
+                    NSLog("WebSocketAudioClient: ready")
+                    self.startPingTimer(for: connection)
+                    self.receiveNext(from: connection, sourceID: id)
+                case .failed(let error):
+                    NSLog("WebSocketAudioClient: failed %@", error as NSError)
                     self.disconnectLocked(reason: "Connection lost: \(error.localizedDescription)")
                     self.scheduleReconnectIfNeeded()
+                case .cancelled:
+                    self.disconnectLocked(reason: "Connection closed.")
+                    self.scheduleReconnectIfNeeded()
+                default:
+                    break
+                }
+            }
+        }
+
+        connection.start(queue: queue)
+    }
+
+    private func receiveNext(from connection: NWConnection, sourceID: UUID) {
+        connection.receiveMessage { [weak self, weak connection] data, contentContext, _, error in
+            guard let self, let connection else {
+                return
+            }
+
+            self.queue.async {
+                guard self.connection === connection else {
+                    return
+                }
+
+                if let error {
+                    NSLog("WebSocketAudioClient.receive failed: %@", error as NSError)
+                    self.disconnectLocked(reason: "Connection lost: \(error.localizedDescription)")
+                    self.scheduleReconnectIfNeeded()
+                    return
+                }
+
+                if let data,
+                   let metadata = contentContext?.protocolMetadata(definition: NWProtocolWebSocket.definition) as? NWProtocolWebSocket.Metadata {
+                    self.handle(data, opcode: metadata.opcode, from: connection, sourceID: sourceID)
+                }
+
+                if self.connection === connection {
+                    self.receiveNext(from: connection, sourceID: sourceID)
                 }
             }
         }
     }
 
-    private func handle(_ message: URLSessionWebSocketTask.Message, from task: URLSessionWebSocketTask, sourceID: UUID) {
-        switch message {
-        case .string(let text):
-            handleTextMessage(Data(text.utf8), from: task, sourceID: sourceID)
-        case .data(let data):
+    private func handle(_ data: Data, opcode: NWProtocolWebSocket.Opcode, from connection: NWConnection, sourceID: UUID) {
+        switch opcode {
+        case .text:
+            handleTextMessage(data, from: connection, sourceID: sourceID)
+        case .binary:
             guard sourceDescriptor != nil else {
-                send(event: ServerEvent(type: "error", message: "Send hello before audio frames.", sourceID: sourceID.uuidString), to: task)
+                send(event: ServerEvent(type: "error", message: "Send hello before audio frames.", sourceID: sourceID.uuidString), to: connection)
                 return
             }
 
             onAudioFrame?(sourceID, data)
-        @unknown default:
+        case .close:
+            disconnectLocked(reason: "Connection closed.")
+            scheduleReconnectIfNeeded()
+        default:
             break
         }
     }
 
-    private func handleTextMessage(_ data: Data, from task: URLSessionWebSocketTask, sourceID: UUID) {
+    private func handleTextMessage(_ data: Data, from connection: NWConnection, sourceID: UUID) {
         guard let hello = try? decoder.decode(ClientHello.self, from: data), hello.type == "hello" else {
-            send(event: ServerEvent(type: "error", message: "Unsupported control message.", sourceID: sourceID.uuidString), to: task)
+            send(event: ServerEvent(type: "error", message: "Unsupported control message.", sourceID: sourceID.uuidString), to: connection)
             return
         }
 
         guard hello.channels == 2, hello.sampleRate == 48_000, hello.codec == "pcm_s16le" else {
-            send(event: ServerEvent(type: "error", message: "RemoteSound currently expects 48 kHz stereo pcm_s16le.", sourceID: sourceID.uuidString), to: task)
+            send(event: ServerEvent(type: "error", message: "RemoteSound currently expects 48 kHz stereo pcm_s16le.", sourceID: sourceID.uuidString), to: connection)
             disconnectLocked(reason: "Remote source format is not supported.")
             return
         }
@@ -175,36 +212,33 @@ final class WebSocketAudioClient {
                 message: "RemoteSound is receiving \(hello.frameSamples) stereo frames per packet.",
                 sourceID: sourceID.uuidString
             ),
-            to: task
+            to: connection
         )
     }
 
-    private func send(event: ServerEvent, to task: URLSessionWebSocketTask) {
-        guard let payload = try? encoder.encode(event),
-              let text = String(data: payload, encoding: .utf8) else {
+    private func send(event: ServerEvent, to connection: NWConnection) {
+        guard let payload = try? encoder.encode(event) else {
             return
         }
 
-        task.send(.string(text)) { error in
-            if let error {
-                NSLog("WebSocketAudioClient.send failed: %@", error as NSError)
-            }
-        }
+        let metadata = NWProtocolWebSocket.Metadata(opcode: .text)
+        let context = NWConnection.ContentContext(identifier: UUID().uuidString, metadata: [metadata])
+        connection.send(content: payload, contentContext: context, isComplete: true, completion: .idempotent)
     }
 
-    private func startPingTimer(for task: URLSessionWebSocketTask) {
+    private func startPingTimer(for connection: NWConnection) {
+        pingTimer?.cancel()
+
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now() + 10, repeating: 10)
-        timer.setEventHandler { [weak self, weak task] in
-            guard let self, let task, self.task === task else {
+        timer.setEventHandler { [weak self, weak connection] in
+            guard let self, let connection, self.connection === connection else {
                 return
             }
 
-            task.sendPing { error in
-                if let error {
-                    NSLog("WebSocketAudioClient.ping failed: %@", error as NSError)
-                }
-            }
+            let metadata = NWProtocolWebSocket.Metadata(opcode: .ping)
+            let context = NWConnection.ContentContext(identifier: UUID().uuidString, metadata: [metadata])
+            connection.send(content: Data(), contentContext: context, isComplete: true, completion: .idempotent)
         }
         timer.resume()
         pingTimer = timer
@@ -230,10 +264,8 @@ final class WebSocketAudioClient {
         pingTimer = nil
 
         let disconnectedSourceID = sourceID
-        task?.cancel(with: .normalClosure, reason: nil)
-        task = nil
-        session?.invalidateAndCancel()
-        session = nil
+        connection?.cancel()
+        connection = nil
         sourceID = nil
         sourceDescriptor = nil
 

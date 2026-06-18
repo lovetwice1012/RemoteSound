@@ -7,6 +7,7 @@ internal sealed class MainForm : Form
     private readonly AppSettings _settings;
     private readonly AudioLoopbackCaptureService _captureService = new();
     private RemoteSoundWebSocketAudioServer? _server;
+    private RemoteSoundHlsServer? _hlsServer;
     private RemoteSoundWebSocketClient? _client;
     private List<AudioDeviceInfo> _devices = [];
     private bool _isDisconnecting;
@@ -343,7 +344,11 @@ internal sealed class MainForm : Form
 
     private void WireEvents()
     {
-        _captureService.FrameReady += frame => _server?.TryQueueAudioFrame(frame);
+        _captureService.FrameReady += frame =>
+        {
+            _server?.TryQueueAudioFrame(frame);
+            _hlsServer?.PushPcmFrame(frame);
+        };
         _captureService.LevelChanged += level => BeginInvokeSafe(() => _levelBar.Value = level);
         _captureService.Log += AppendLog;
     }
@@ -432,7 +437,12 @@ internal sealed class MainForm : Form
             server.ClientDisconnected += () => BeginInvokeSafe(() => SetStatus(_server?.IsRunning == true ? "Waiting for iPhone receiver" : "Idle"));
             _server = server;
 
+            var hlsServer = new RemoteSoundHlsServer();
+            hlsServer.Log += AppendLog;
+            _hlsServer = hlsServer;
+
             await server.StartAsync(_settings.ListenPort, _settings.SourceName, _settings.ClientId, CancellationToken.None).ConfigureAwait(false);
+            hlsServer.Start(_settings.ListenPort + 1);
             _captureService.Start(selectedDevice?.Id, _settings.Gain);
 
             BeginInvokeSafe(() =>
@@ -469,6 +479,11 @@ internal sealed class MainForm : Form
             {
                 await _server.DisposeAsync().ConfigureAwait(false);
                 _server = null;
+            }
+            if (_hlsServer is not null)
+            {
+                _hlsServer.Dispose();
+                _hlsServer = null;
             }
         }
         finally

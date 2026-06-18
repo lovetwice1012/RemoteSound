@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("RemoteSound.WinForms")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+aa97eb83616e06e7003a3b573b5c80c6fba03501")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+bfcfd664b85e9d024b87ac3610bf3a3d6d98b865")]
 [assembly: System.Reflection.AssemblyProductAttribute("RemoteSound.WinForms")]
 [assembly: System.Reflection.AssemblyTitleAttribute("RemoteSound.WinForms")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

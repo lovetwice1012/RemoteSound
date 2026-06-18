@@ -12,7 +12,7 @@ final class AppModel {
     var serverIsRunning = false
     var audioStatusMessage = "Preparing audio session..."
     var localAddresses: [String] = []
-    var remoteURLString = UserDefaults.standard.string(forKey: "RemoteSound.RemoteURL") ?? "ws://192.168.1.10:8765/"
+    var remoteURLString = UserDefaults.standard.string(forKey: "RemoteSound.RemoteURL") ?? "http://192.168.1.10:8766/stream.m3u8"
     var autoConnectDiscoveredSource = UserDefaults.standard.object(forKey: "RemoteSound.AutoConnectDiscoveredSource") as? Bool ?? true {
         didSet {
             UserDefaults.standard.set(autoConnectDiscoveredSource, forKey: "RemoteSound.AutoConnectDiscoveredSource")
@@ -25,14 +25,18 @@ final class AppModel {
     var selectedStableSourceID: String?
 
     private let mixer = AudioMixerController()
+    private let hlsPlayer = HLSAudioPlayer()
     private let settingsStore = SourceSettingsStore()
     private let client = WebSocketAudioClient()
     private let serviceBrowser = RemoteAudioServiceBrowser()
+    private let lanScanner = RemoteAudioLANScanner()
     private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
 
     init() {
         wireClientCallbacks()
+        wireHLSCallbacks()
         wireDiscoveryCallbacks()
+        wireScannerCallbacks()
 
         Task {
             start()
@@ -62,17 +66,29 @@ final class AppModel {
         UserDefaults.standard.set(trimmedURL, forKey: "RemoteSound.RemoteURL")
 
         guard let url = URL(string: trimmedURL),
-              url.scheme == "ws" || url.scheme == "wss" else {
+              ["ws", "wss", "http", "https"].contains(url.scheme ?? "") else {
             serverIsRunning = false
-            serverMessage = "Enter a ws:// or wss:// URL for the Windows source."
+            serverMessage = "Enter a ws://, wss://, http://, or https:// URL for the Windows source."
             return
         }
 
-        client.connect(to: url)
+        if url.scheme == "http" || url.scheme == "https" {
+            client.disconnect()
+            sources.removeAll()
+            hlsPlayer.play(url: url)
+        } else {
+            hlsPlayer.stop()
+            client.connect(to: url)
+        }
     }
 
     func disconnectRemoteSource() {
         client.disconnect()
+        hlsPlayer.stop()
+    }
+
+    func scanForRemoteSources() {
+        lanScanner.scan()
     }
 
     func handleScenePhase(_ phase: ScenePhase) {
@@ -89,6 +105,7 @@ final class AppModel {
             endBackgroundAudioTask()
             client.reconnectIfNeeded()
             client.logDebugState(reason: "scene became active")
+            hlsPlayer.reactivate()
             mixer.reactivateIfNeeded(reason: "app became active")
             mixer.logDebugState(reason: "scene became active")
         case .inactive:
@@ -331,6 +348,14 @@ final class AppModel {
         }
     }
 
+    private func wireHLSCallbacks() {
+        hlsPlayer.onStatusMessage = { [weak self] message, isPlaying in
+            self?.serverMessage = message
+            self?.serverIsRunning = isPlaying
+            self?.audioStatusMessage = message
+        }
+    }
+
     private func wireDiscoveryCallbacks() {
         serviceBrowser.onStatusChange = { [weak self] message in
             Task { @MainActor in
@@ -355,11 +380,33 @@ final class AppModel {
         }
     }
 
+    private func wireScannerCallbacks() {
+        lanScanner.onStatusChange = { [weak self] message in
+            Task { @MainActor in
+                self?.discoveryMessage = message
+            }
+        }
+
+        lanScanner.onServerFound = { [weak self] url in
+            Task { @MainActor in
+                guard let self else {
+                    return
+                }
+
+                self.remoteURLString = url.absoluteString
+                self.serverMessage = "Found RemoteSound source. Connecting..."
+                self.connectToRemoteSource()
+            }
+        }
+    }
+
     private func updateDiscoveryState() {
         if autoConnectDiscoveredSource {
             serviceBrowser.start()
+            lanScanner.scan()
         } else {
             serviceBrowser.stop()
+            lanScanner.stop()
         }
     }
 
