@@ -46,10 +46,12 @@ final class WebSocketAudioServer {
     func restartIfNeeded() {
         queue.async {
             guard self.listener == nil else {
+                NSLog("WebSocketAudioServer.restartIfNeeded: listener already active")
                 return
             }
 
             do {
+                NSLog("WebSocketAudioServer.restartIfNeeded: restarting listener")
                 try self.startListener()
             } catch {
                 let nsError = error as NSError
@@ -59,7 +61,21 @@ final class WebSocketAudioServer {
         }
     }
 
+    func logDebugState(reason: String) {
+        queue.async {
+            let completedHandshakeCount = self.connections.values.filter { $0.hasCompletedHandshake }.count
+            NSLog(
+                "WebSocketAudioServer.debug: reason=%@ listenerActive=%@ connections=%d completedHandshakes=%d",
+                reason,
+                self.listener == nil ? "false" : "true",
+                self.connections.count,
+                completedHandshakeCount
+            )
+        }
+    }
+
     private func startListener() throws {
+        NSLog("WebSocketAudioServer.startListener: creating listener on port %d", Int(port))
         let tcpOptions = NWProtocolTCP.Options()
         let parameters = NWParameters(tls: nil, tcp: tcpOptions)
         parameters.allowLocalEndpointReuse = true
@@ -80,6 +96,7 @@ final class WebSocketAudioServer {
         listener.stateUpdateHandler = { [weak self] state in
             switch state {
             case .ready:
+                NSLog("WebSocketAudioServer.listener: ready on port %d", Int(port.rawValue))
                 self?.onServerStateChange?("Listening on port \(port.rawValue)")
             case .failed(let error):
                 let nsError = error as NSError
@@ -122,6 +139,7 @@ final class WebSocketAudioServer {
 
     private func accept(connection: NWConnection) {
         let id = UUID()
+        NSLog("WebSocketAudioServer.accept: id=%@", id.uuidString)
         let descriptor = SourceDescriptor(
             id: id,
             name: "Pending source",
@@ -138,6 +156,11 @@ final class WebSocketAudioServer {
         onSourceConnected?(descriptor)
 
         connection.stateUpdateHandler = { [weak self] state in
+            NSLog(
+                "WebSocketAudioServer.connection: id=%@ state=%@",
+                id.uuidString,
+                String(describing: state)
+            )
             switch state {
             case .failed(let error):
                 self?.onServerStateChange?("Connection failed: \(error.localizedDescription)")

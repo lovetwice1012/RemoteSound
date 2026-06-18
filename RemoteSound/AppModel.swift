@@ -49,19 +49,33 @@ final class AppModel {
     }
 
     func handleScenePhase(_ phase: ScenePhase) {
+        let backgroundTimeRemaining = UIApplication.shared.backgroundTimeRemaining
+        NSLog(
+            "AppModel.handleScenePhase: phase=%@ sources=%d backgroundTimeRemaining=%f",
+            String(describing: phase),
+            sources.count,
+            backgroundTimeRemaining
+        )
+
         switch phase {
         case .active:
             endBackgroundAudioTask()
             server?.restartIfNeeded()
+            server?.logDebugState(reason: "scene became active")
             mixer.reactivateIfNeeded(reason: "app became active")
+            mixer.logDebugState(reason: "scene became active")
         case .inactive:
             beginBackgroundAudioTaskIfNeeded()
             server?.restartIfNeeded()
+            server?.logDebugState(reason: "scene became inactive")
             mixer.prepareForBackgroundPlayback()
+            mixer.logDebugState(reason: "scene became inactive")
         case .background:
             beginBackgroundAudioTaskIfNeeded()
             server?.restartIfNeeded()
+            server?.logDebugState(reason: "scene entered background")
             mixer.prepareForBackgroundPlayback()
+            mixer.logDebugState(reason: "scene entered background")
         default:
             break
         }
@@ -148,9 +162,11 @@ final class AppModel {
 
         backgroundTaskID = UIApplication.shared.beginBackgroundTask(withName: "RemoteSound background audio") { [weak self] in
             Task { @MainActor in
+                NSLog("AppModel: background audio task expired")
                 self?.endBackgroundAudioTask()
             }
         }
+        NSLog("AppModel: background audio task started id=%@", String(describing: backgroundTaskID))
     }
 
     private func endBackgroundAudioTask() {
@@ -159,6 +175,7 @@ final class AppModel {
         }
 
         UIApplication.shared.endBackgroundTask(backgroundTaskID)
+        NSLog("AppModel: background audio task ended id=%@", String(describing: backgroundTaskID))
         backgroundTaskID = .invalid
     }
 

@@ -70,6 +70,7 @@ final class AudioMixerController {
     private let backgroundKeepAliveChannelCount: AVAudioChannelCount = 2
     private let backgroundKeepAliveDuration: Double = 0.25
     private let backgroundKeepAliveAmplitude: Float = 0.00001
+    private let backgroundKeepAliveFrequency: Double = 440
     private let minimumLeadBufferCount = 3
     private let targetLeadBufferCount = 6
     private let maximumQueuedBufferCount = 18
@@ -118,6 +119,14 @@ final class AudioMixerController {
 
     func prepareForBackgroundPlayback() {
         engineQueue.async {
+            NSLog(
+                "AudioMixerController.prepareForBackgroundPlayback: begin engineRunning=%@ sources=%d keepAliveAttached=%@ keepAliveScheduled=%@",
+                self.engine.isRunning ? "true" : "false",
+                self.channels.count,
+                self.backgroundKeepAliveIsAttached ? "true" : "false",
+                self.backgroundKeepAliveIsScheduled ? "true" : "false"
+            )
+
             do {
                 try self.configureSession()
                 if !self.channels.isEmpty {
@@ -125,10 +134,17 @@ final class AudioMixerController {
                     self.ensureBackgroundKeepAliveRunningLocked()
                     self.onStatusMessage?("Background audio active.")
                 }
+                self.logDebugStateLocked(reason: "prepared for background playback")
             } catch {
                 NSLog("AudioMixerController.prepareForBackgroundPlayback failed: %@", error as NSError)
                 self.onStatusMessage?("Background audio setup failed: \(error.localizedDescription)")
             }
+        }
+    }
+
+    func logDebugState(reason: String) {
+        engineQueue.async {
+            self.logDebugStateLocked(reason: reason)
         }
     }
 
@@ -325,7 +341,8 @@ final class AudioMixerController {
         if let floatChannels = buffer.floatChannelData {
             for channel in 0..<Int(format.channelCount) {
                 for frame in 0..<Int(frameCapacity) {
-                    floatChannels[channel][frame] = frame.isMultiple(of: 2) ? backgroundKeepAliveAmplitude : -backgroundKeepAliveAmplitude
+                    let phase = 2 * Double.pi * backgroundKeepAliveFrequency * Double(frame) / format.sampleRate
+                    floatChannels[channel][frame] = Float(sin(phase)) * backgroundKeepAliveAmplitude
                 }
             }
         }
@@ -352,11 +369,25 @@ final class AudioMixerController {
         if !backgroundKeepAliveIsScheduled {
             backgroundKeepAliveNode.scheduleBuffer(buffer, at: nil, options: [.loops], completionHandler: nil)
             backgroundKeepAliveIsScheduled = true
+            NSLog("AudioMixerController: background keep-alive buffer scheduled")
         }
 
         if !backgroundKeepAliveNode.isPlaying {
             backgroundKeepAliveNode.play()
+            NSLog("AudioMixerController: background keep-alive node playing")
         }
+    }
+
+    private func logDebugStateLocked(reason: String) {
+        NSLog(
+            "AudioMixerController.debug: reason=%@ engineRunning=%@ sources=%d keepAliveAttached=%@ keepAliveScheduled=%@ keepAlivePlaying=%@",
+            reason,
+            engine.isRunning ? "true" : "false",
+            channels.count,
+            backgroundKeepAliveIsAttached ? "true" : "false",
+            backgroundKeepAliveIsScheduled ? "true" : "false",
+            backgroundKeepAliveNode.isPlaying ? "true" : "false"
+        )
     }
 
     private func stopBackgroundKeepAliveLocked() {

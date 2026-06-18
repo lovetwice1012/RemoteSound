@@ -24,6 +24,8 @@
     <true/>
     <key>NSLocalNetworkUsageDescription</key>
     <string>RemoteSound receives microphone audio from devices on your local network.</string>
+    <key>UIRequiresPersistentWiFi</key>
+    <true/>
     <key>UIApplicationSceneManifest</key>
     <dict>
         <key>UIApplicationSupportsMultipleScenes</key>
