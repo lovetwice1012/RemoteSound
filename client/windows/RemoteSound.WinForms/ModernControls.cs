@@ -56,6 +56,8 @@ internal sealed class ModernButton : Button
         Font = new Font("Segoe UI Semibold", 10.5f, FontStyle.Regular, GraphicsUnit.Point);
         Cursor = Cursors.Hand;
         Height = 40;
+        MinimumSize = new Size(0, 40);
+        TextAlign = ContentAlignment.MiddleCenter;
     }
 
     protected override void OnPaint(PaintEventArgs pevent)

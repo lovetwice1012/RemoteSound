@@ -50,6 +50,8 @@ final class AppModel {
         switch phase {
         case .active:
             mixer.reactivateIfNeeded(reason: "app became active")
+        case .inactive:
+            mixer.prepareForBackgroundPlayback()
         case .background:
             mixer.prepareForBackgroundPlayback()
         default:

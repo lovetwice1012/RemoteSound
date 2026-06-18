@@ -448,8 +448,26 @@ final class AudioMixerController {
             self?.handleRouteChange(notification)
         }
 
+        let engineConfigurationToken = center.addObserver(
+            forName: Notification.Name.AVAudioEngineConfigurationChange,
+            object: engine,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handleEngineConfigurationChange()
+        }
+
+        let mediaServicesResetToken = center.addObserver(
+            forName: AVAudioSession.mediaServicesWereResetNotification,
+            object: session,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handleMediaServicesReset()
+        }
+
         notificationTokens.append(interruptionToken)
         notificationTokens.append(routeChangeToken)
+        notificationTokens.append(engineConfigurationToken)
+        notificationTokens.append(mediaServicesResetToken)
     }
 
     private func handleInterruption(_ notification: Notification) {
@@ -487,6 +505,16 @@ final class AudioMixerController {
         default:
             break
         }
+    }
+
+    private func handleEngineConfigurationChange() {
+        onStatusMessage?("Audio engine configuration changed. Reactivating playback.")
+        reactivateSession(reason: "engine configuration changed")
+    }
+
+    private func handleMediaServicesReset() {
+        onStatusMessage?("Audio services reset. Reactivating playback.")
+        reactivateSession(reason: "media services reset")
     }
 
     private func reactivateSession(reason: String) {

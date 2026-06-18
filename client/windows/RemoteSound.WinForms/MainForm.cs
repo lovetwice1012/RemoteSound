@@ -27,8 +27,9 @@ internal sealed class MainForm : Form
     {
         _settings = SettingsStore.Load();
         Text = "RemoteSound Speaker Client";
-        MinimumSize = new Size(780, 560);
-        Size = new Size(900, 640);
+        AutoScaleMode = AutoScaleMode.Dpi;
+        MinimumSize = new Size(780, 640);
+        Size = new Size(900, 700);
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.None;
         BackColor = Color.FromArgb(18, 20, 28);
@@ -74,20 +75,20 @@ internal sealed class MainForm : Form
             ColumnCount = 1,
             BackColor = Color.Transparent,
         };
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 64));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 248));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 84));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 276));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 120));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         Controls.Add(root);
 
         var header = BuildHeader();
         root.Controls.Add(header, 0, 0);
 
-        var settingsCard = new GlassPanel { Dock = DockStyle.Fill, Padding = new Padding(20), Margin = new Padding(0, 8, 0, 10) };
+        var settingsCard = new GlassPanel { Dock = DockStyle.Fill, Padding = new Padding(16), Margin = new Padding(0, 8, 0, 10) };
         root.Controls.Add(settingsCard, 0, 1);
         BuildSettingsCard(settingsCard);
 
-        var statusCard = new GlassPanel { Dock = DockStyle.Fill, Padding = new Padding(20), Margin = new Padding(0, 0, 0, 10) };
+        var statusCard = new GlassPanel { Dock = DockStyle.Fill, Padding = new Padding(16), Margin = new Padding(0, 0, 0, 10) };
         root.Controls.Add(statusCard, 0, 2);
         BuildStatusCard(statusCard);
 
@@ -182,7 +183,7 @@ internal sealed class MainForm : Form
         grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 132));
         for (var i = 0; i < 5; i++)
         {
-            grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
+            grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
         }
 
         parent.Controls.Add(grid);
@@ -254,8 +255,8 @@ internal sealed class MainForm : Form
         grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
         grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 20));
         grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
+        grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
         grid.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
         parent.Controls.Add(grid);
 
         _statusLabel.Text = "Idle";
@@ -268,6 +269,7 @@ internal sealed class MainForm : Form
         _connectButton.Text = "Connect";
         _connectButton.Dock = DockStyle.Fill;
         _connectButton.Margin = new Padding(8, 0, 0, 0);
+        _connectButton.MinimumSize = new Size(0, 40);
         _connectButton.Click += async (_, _) => await ConnectInternalAsync().ConfigureAwait(false);
         grid.Controls.Add(_connectButton, 1, 0);
 
@@ -275,6 +277,7 @@ internal sealed class MainForm : Form
         _disconnectButton.AccentColor = Color.FromArgb(220, 86, 86);
         _disconnectButton.Dock = DockStyle.Fill;
         _disconnectButton.Margin = new Padding(8, 0, 0, 0);
+        _disconnectButton.MinimumSize = new Size(0, 40);
         _disconnectButton.Click += async (_, _) => await DisconnectInternalAsync().ConfigureAwait(false);
         grid.Controls.Add(_disconnectButton, 2, 0);
 
