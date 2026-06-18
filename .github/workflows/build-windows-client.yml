@@ -1,0 +1,96 @@
+name: Build Windows Client
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'client/windows/RemoteSound.WinForms/**'
+      - '.github/workflows/build-windows-client.yml'
+  pull_request:
+    paths:
+      - 'client/windows/RemoteSound.WinForms/**'
+      - '.github/workflows/build-windows-client.yml'
+
+permissions:
+  contents: read
+
+env:
+  PROJECT_PATH: client/windows/RemoteSound.WinForms/RemoteSound.WinForms.csproj
+  CONFIGURATION: Release
+  DOTNET_VERSION: 8.0.x
+  RUNTIME_IDENTIFIER: win-x64
+  PUBLISH_DIR: artifacts/publish/RemoteSound.WinForms-win-x64
+  ZIP_PATH: artifacts/RemoteSound.WinForms-win-x64.zip
+
+jobs:
+  build-windows-client:
+    name: Build RemoteSound.WinForms
+    runs-on: windows-latest
+
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Show .NET info
+        run: dotnet --info
+
+      - name: Restore
+        run: dotnet restore "${{ env.PROJECT_PATH }}" --runtime "${{ env.RUNTIME_IDENTIFIER }}"
+
+      - name: Build
+        run: |
+          dotnet build "${{ env.PROJECT_PATH }}" `
+            --configuration "${{ env.CONFIGURATION }}" `
+            --runtime "${{ env.RUNTIME_IDENTIFIER }}" `
+            --no-restore
+
+      - name: Publish self-contained app
+        run: |
+          if (Test-Path "${{ env.PUBLISH_DIR }}") {
+            Remove-Item "${{ env.PUBLISH_DIR }}" -Recurse -Force
+          }
+
+          dotnet publish "${{ env.PROJECT_PATH }}" `
+            --configuration "${{ env.CONFIGURATION }}" `
+            --runtime "${{ env.RUNTIME_IDENTIFIER }}" `
+            --self-contained true `
+            --no-restore `
+            --output "${{ env.PUBLISH_DIR }}" `
+            -p:PublishSingleFile=true `
+            -p:IncludeNativeLibrariesForSelfExtract=true `
+            -p:EnableCompressionInSingleFile=true `
+            -p:PublishReadyToRun=false
+
+      - name: Package ZIP
+        run: |
+          New-Item -ItemType Directory -Force -Path "artifacts" | Out-Null
+
+          if (Test-Path "${{ env.ZIP_PATH }}") {
+            Remove-Item "${{ env.ZIP_PATH }}" -Force
+          }
+
+          Compress-Archive `
+            -Path "${{ env.PUBLISH_DIR }}\*" `
+            -DestinationPath "${{ env.ZIP_PATH }}" `
+            -Force
+
+          Get-ChildItem "artifacts" -Recurse | Format-Table FullName, Length
+
+      - name: Upload Windows client artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RemoteSound.WinForms-win-x64
+          path: ${{ env.ZIP_PATH }}
+          if-no-files-found: error
+          retention-days: 14
