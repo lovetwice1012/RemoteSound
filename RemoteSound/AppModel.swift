@@ -128,6 +128,16 @@ final class AppModel {
     private func start() {
         do {
             try mixer.start()
+        } catch {
+            serverIsRunning = false
+            let nsError = error as NSError
+            serverMessage = "Audio startup failed: \(error.localizedDescription) (\(nsError.domain) code \(nsError.code))"
+            audioStatusMessage = "Audio session failed: \(error.localizedDescription) (\(nsError.domain) code \(nsError.code))"
+            NSLog("Audio start error: %@", nsError)
+            return
+        }
+
+        do {
             try server?.start()
             serverIsRunning = true
             serverMessage = "Listening for WebSocket audio sources on port \(serverPort)."
@@ -135,8 +145,8 @@ final class AppModel {
         } catch {
             serverIsRunning = false
             let nsError = error as NSError
-            serverMessage = "Startup failed: \(error.localizedDescription) (\(nsError.domain) code \(nsError.code))"
-            audioStatusMessage = "Audio session failed: \(error.localizedDescription) (\(nsError.domain) code \(nsError.code))"
+            serverMessage = "Server startup failed: \(error.localizedDescription) (\(nsError.domain) code \(nsError.code))"
+            audioStatusMessage = "Server failed: \(error.localizedDescription) (\(nsError.domain) code \(nsError.code))"
             NSLog("Server start error: %@", nsError)
         }
     }

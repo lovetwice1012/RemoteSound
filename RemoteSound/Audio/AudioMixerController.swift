@@ -109,9 +109,13 @@ final class AudioMixerController {
                 return
             }
 
+            // Use the active audio session's sample rate when available to avoid format mismatches.
+            let sessionSampleRate = AVAudioSession.sharedInstance().sampleRate
+            let effectiveSampleRate = sessionSampleRate > 0 ? sessionSampleRate : self.sampleRate
+
             let format = AVAudioFormat(
                 commonFormat: .pcmFormatFloat32,
-                sampleRate: self.sampleRate,
+                sampleRate: effectiveSampleRate,
                 channels: self.channelCount,
                 interleaved: false
             )
@@ -214,6 +218,20 @@ final class AudioMixerController {
     private func configureSession() throws {
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.playback, mode: .default, options: [.mixWithOthers, .allowAirPlay])
+
+        // Try to request the preferred sample rate and IO buffer duration, but don't fail if unavailable.
+        do {
+            try session.setPreferredSampleRate(sampleRate)
+        } catch {
+            NSLog("setPreferredSampleRate failed: %@", error as NSError)
+        }
+
+        do {
+            try session.setPreferredIOBufferDuration(0.02)
+        } catch {
+            NSLog("setPreferredIOBufferDuration failed: %@", error as NSError)
+        }
+
         try session.setActive(true)
     }
 
