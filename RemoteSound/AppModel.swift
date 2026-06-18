@@ -16,9 +16,10 @@ final class AppModel {
 
     private let mixer = AudioMixerController()
     private let settingsStore = SourceSettingsStore()
-    private lazy var server = WebSocketAudioServer(port: serverPort)
+    private var server: WebSocketAudioServer?
 
     init() {
+        server = WebSocketAudioServer(port: serverPort)
         localAddresses = LocalNetworkAddressProvider.ipv4Addresses()
         wireServerCallbacks()
 
@@ -116,7 +117,7 @@ final class AppModel {
     }
 
     func disconnectSource(id: UUID) {
-        server.disconnectSource(id: id)
+        server?.disconnectSource(id: id)
     }
 
     private func applyEqualizer(for index: Int) {
@@ -127,7 +128,7 @@ final class AppModel {
     private func start() {
         do {
             try mixer.start()
-            try server.start()
+            try server?.start()
             serverIsRunning = true
             serverMessage = "Listening for WebSocket audio sources on port \(serverPort)."
             audioStatusMessage = "Audio session active."
@@ -160,7 +161,7 @@ final class AppModel {
             }
         }
 
-        server.onServerStateChange = { [weak self] message in
+        server?.onServerStateChange = { [weak self] message in
             Task { @MainActor in
                 guard let self else {
                     return
@@ -172,7 +173,7 @@ final class AppModel {
             }
         }
 
-        server.onSourceConnected = { [weak self] descriptor in
+        server?.onSourceConnected = { [weak self] descriptor in
             Task { @MainActor in
                 guard let self else {
                     return
@@ -192,7 +193,7 @@ final class AppModel {
             }
         }
 
-        server.onSourceUpdated = { [weak self] descriptor in
+        server?.onSourceUpdated = { [weak self] descriptor in
             Task { @MainActor in
                 guard let self,
                       let index = self.sources.firstIndex(where: { $0.id == descriptor.id }) else {
@@ -212,7 +213,7 @@ final class AppModel {
             }
         }
 
-        server.onSourceDisconnected = { [weak self] id in
+        server?.onSourceDisconnected = { [weak self] id in
             Task { @MainActor in
                 guard let self else {
                     return
@@ -225,7 +226,7 @@ final class AppModel {
             }
         }
 
-        server.onAudioFrame = { [weak self] id, payload in
+        server?.onAudioFrame = { [weak self] id, payload in
             guard let self else {
                 return
             }

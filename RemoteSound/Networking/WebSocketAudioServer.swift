@@ -49,8 +49,8 @@ final class WebSocketAudioServer {
         let webSocketOptions = NWProtocolWebSocket.Options()
         webSocketOptions.autoReplyPing = true
         webSocketOptions.maximumMessageSize = 65_536
-        webSocketOptions.setClientRequestHandler(queue) { _ in
-            NWProtocolWebSocket.Response(status: .accept)
+        webSocketOptions.setClientRequestHandler(queue) { _, _ in
+            NWProtocolWebSocket.Response(status: .accept, subprotocol: nil)
         }
 
         parameters.defaultProtocolStack.applicationProtocols.insert(webSocketOptions, at: 0)
