@@ -77,7 +77,15 @@ final class AudioMixerController {
     }
 
     func start() throws {
-        try configureSession()
+        NSLog("AudioMixerController.start: beginning configureSession")
+        do {
+            try configureSession()
+            let session = AVAudioSession.sharedInstance()
+            NSLog("AudioMixerController.start: configureSession succeeded (sampleRate=%f ioBufferDuration=%f)", session.sampleRate, session.ioBufferDuration)
+        } catch {
+            NSLog("AudioMixerController.start: configureSession failed: %@", error as NSError)
+            throw error
+        }
 
         var caughtError: Error?
         engineQueue.sync {
@@ -90,6 +98,7 @@ final class AudioMixerController {
             do {
                 try engine.start()
             } catch {
+                NSLog("AudioMixerController.start: engine.start failed: %@", error as NSError)
                 caughtError = error
             }
         }
@@ -217,22 +226,51 @@ final class AudioMixerController {
 
     private func configureSession() throws {
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playback, mode: .default, options: [.mixWithOthers, .allowAirPlay])
 
-        // Try to request the preferred sample rate and IO buffer duration, but don't fail if unavailable.
+        try audioStep("setCategory(playback)") {
+            try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+        }
+
+        // Preferred values are hints. Keep startup alive if the current route rejects them.
         do {
-            try session.setPreferredSampleRate(sampleRate)
+            try audioStep("setPreferredSampleRate") {
+                try session.setPreferredSampleRate(sampleRate)
+            }
         } catch {
-            NSLog("setPreferredSampleRate failed: %@", error as NSError)
+            NSLog("setPreferredSampleRate ignored: %@", error as NSError)
         }
 
         do {
-            try session.setPreferredIOBufferDuration(0.02)
+            try audioStep("setPreferredIOBufferDuration") {
+                try session.setPreferredIOBufferDuration(0.02)
+            }
         } catch {
-            NSLog("setPreferredIOBufferDuration failed: %@", error as NSError)
+            NSLog("setPreferredIOBufferDuration ignored: %@", error as NSError)
         }
 
-        try session.setActive(true)
+        try audioStep("setActive") {
+            try session.setActive(true)
+        }
+
+        NSLog(
+            "Audio session active: category=%@ mode=%@ sampleRate=%f ioBufferDuration=%f outputChannels=%ld route=%@",
+            session.category.rawValue,
+            session.mode.rawValue,
+            session.sampleRate,
+            session.ioBufferDuration,
+            session.outputNumberOfChannels,
+            String(describing: session.currentRoute)
+        )
+    }
+
+    private func audioStep(_ name: String, _ body: () throws -> Void) throws {
+        do {
+            try body()
+            NSLog("Audio OK: %@", name)
+        } catch {
+            NSLog("Audio FAILED: %@: %@", name, error as NSError)
+            throw error
+        }
     }
 
     private func installNotificationObservers() {
